@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ポケモンユナイト 選手登録 & ドラフト（リアルタイム）</title>
+  <title>ポケユナ 選手登録 & 6チームドラフト（リアルタイム）</title>
   <style>
     :root{--bg:#0f172a;--card:#111827;--sub:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--acc:#22d3ee;--good:#34d399;--bad:#f87171}
     html,body{margin:0;padding:0;background:linear-gradient(180deg,#0b1220,#0f172a 40%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
@@ -15,7 +15,7 @@
     .grid{display:grid;gap:12px}
     .g2{grid-template-columns:repeat(2,minmax(0,1fr))}
     .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
-    @media (max-width:900px){.g2,.g3{grid-template-columns:1fr}}
+    @media (max-width:1000px){.g2,.g3{grid-template-columns:1fr}}
     input[type=text],input[type=password],select,textarea{width:100%;padding:10px;border-radius:10px;background:#0b1220;border:1px solid #233047;color:var(--text)}
     textarea{min-height:72px;resize:vertical}
     .btn{display:inline-flex;align-items:center;gap:8px;border-radius:12px;padding:10px 14px;border:1px solid #324256;background:#152238;color:var(--text);cursor:pointer}
@@ -35,12 +35,16 @@
     .table th,.table td{border-bottom:1px solid #2a344a;padding:8px 6px;text-align:left}
     .center{text-align:center}
     .right{text-align:right}
+    .teamGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    @media (max-width:1200px){.teamGrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media (max-width:800px){.teamGrid{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>🟣 ポケユナ選手登録 & ドラフト（リアルタイム）</h1>
-  <div class="note">URLに <code>?room=任意文字列</code> を付けると別ルームになります（例：<code>?room=finals</code>）。未指定は <code>default</code>。</div>
+  <h1>🟣 ポケユナ選手登録 & 6チームドラフト（リアルタイム）</h1>
+  <div class="note">URL末尾に <code>?room=任意</code> でルーム分け。画像は <code>/images/</code> 配下から選択。</div>
+
   <div class="tabs" id="tabs">
     <button class="tab active" data-panel="register">① 選手登録</button>
     <button class="tab" data-panel="players">登録一覧</button>
@@ -80,26 +84,28 @@
 
       <div class="g3">
         <div>
-          <label>使用ポケモン①（画像 or アップ）</label>
-          <input type="file" class="pokeFile" data-slot="0" accept="image/*">
+          <label>使用ポケモン①（/images/ から選択）</label>
+          <select class="pokeSelect" data-slot="0"></select>
           <div class="row" style="margin-top:6px"><img class="pokeThumb" id="pokePrev0" alt="poke1"></div>
         </div>
         <div>
-          <label>使用ポケモン②（画像 or アップ）</label>
-          <input type="file" class="pokeFile" data-slot="1" accept="image/*">
+          <label>使用ポケモン②（/images/ から選択）</label>
+          <select class="pokeSelect" data-slot="1"></select>
           <div class="row" style="margin-top:6px"><img class="pokeThumb" id="pokePrev1" alt="poke2"></div>
         </div>
         <div>
-          <label>使用ポケモン③（画像 or アップ）</label>
-          <input type="file" class="pokeFile" data-slot="2" accept="image/*">
+          <label>使用ポケモン③（/images/ から選択）</label>
+          <select class="pokeSelect" data-slot="2"></select>
           <div class="row" style="margin-top:6px"><img class="pokeThumb" id="pokePrev2" alt="poke3"></div>
         </div>
       </div>
 
+      <input type="hidden" id="editId" value="">
       <div class="row">
-        <button type="submit" class="btn acc">登録する</button>
+        <button type="submit" class="btn acc" id="btnRegister">登録する / 上書き保存</button>
         <button type="button" id="resetForm" class="btn">リセット</button>
       </div>
+      <div class="note">※ 登録・編集時に操作パスワードが必要です</div>
     </form>
   </section>
 
@@ -108,45 +114,19 @@
     <div class="row" style="justify-content:space-between">
       <div class="note">登録人数：<span id="playerCount">0</span></div>
       <div class="row">
+        <button id="sortHigh" class="btn">ポイント高い順</button>
+        <button id="sortLow" class="btn">ポイント低い順</button>
         <button id="clearAll" class="btn bad">全削除</button>
       </div>
     </div>
     <div class="hr"></div>
     <div id="playerList" class="list"></div>
+    <div class="note" style="margin-top:8px">※ 全削除・個別削除・編集は操作パスワードが必要です</div>
   </section>
 
   <!-- Draft Panel -->
   <section class="panel hidden" id="panel-draft">
-    <div class="grid g2">
-      <div class="card">
-        <h3>リーダーA ログイン</h3>
-        <div class="row">
-          <input type="password" id="passA" placeholder="パスワードABC">
-          <button class="btn" id="loginA">入室</button>
-        </div>
-        <div id="aArea" class="hidden">
-          <div class="row" style="justify-content:space-between;align-items:center;margin-top:8px">
-            <div class="pill">Aのピック</div>
-            <button class="btn" id="lockA">ロック</button>
-          </div>
-          <table class="table" style="margin-top:6px"><thead><tr><th>#</th><th>選手</th></tr></thead><tbody id="aPicks"></tbody></table>
-        </div>
-      </div>
-      <div class="card">
-        <h3>リーダーB ログイン</h3>
-        <div class="row">
-          <input type="password" id="passB" placeholder="パスワードDEF">
-          <button class="btn" id="loginB">入室</button>
-        </div>
-        <div id="bArea" class="hidden">
-          <div class="row" style="justify-content:space-between;align-items:center;margin-top:8px">
-            <div class="pill">Bのピック</div>
-            <button class="btn" id="lockB">ロック</button>
-          </div>
-          <table class="table" style="margin-top:6px"><thead><tr><th>#</th><th>選手</th></tr></thead><tbody id="bPicks"></tbody></table>
-        </div>
-      </div>
-    </div>
+    <div class="teamGrid" id="loginGrid"></div>
 
     <div class="hr"></div>
     <div class="row" style="justify-content:space-between;align-items:center">
@@ -155,19 +135,10 @@
         <button class="btn acc" id="reveal">同時公開 & 解決</button>
         <button class="btn" id="resetDraft">ドラフト初期化</button>
       </div>
-      <div class="note">※ 競合はダイス（d6）で決定</div>
+      <div class="note">※ 競合は各チームd6で判定、最大値勝ち。最大同値は再抽選。</div>
     </div>
 
-    <div class="grid g2" style="margin-top:12px">
-      <div class="card">
-        <h3>チームA</h3>
-        <div id="teamA"></div>
-      </div>
-      <div class="card">
-        <h3>チームB</h3>
-        <div id="teamB"></div>
-      </div>
-    </div>
+    <div class="teamGrid" id="teamsGrid"></div>
 
     <div class="card" style="margin-top:12px">
       <h3>ログ</h3>
@@ -181,6 +152,7 @@
       <div>
         <h3>エクスポート</h3>
         <button class="btn" id="exportBtn">JSONを書き出す</button>
+        <div class="note">※ 書き出し時に操作パスワードが必要です</div>
       </div>
       <div>
         <h3>インポート</h3>
@@ -190,97 +162,156 @@
   </section>
 </div>
 
-<!-- Socket.IO クライアント（サーバーから供給されるビルトイン） -->
 <script src="/socket.io/socket.io.js"></script>
 <script>
-// ====== util ======
-const POINTS_BY_RANK = {
-  'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,
-  'エキスパート':15,'マスター1200':15,'マスター1400～1600':20,
-};
-function escapeHTML(s){ return (s||'').replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
+// ====== ユーティリティ ======
+const POINTS_BY_RANK = { 'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,'エキスパート':15,'マスター1200':15,'マスター1400～1600':20 };
+function escapeHTML(s){ return (s||'').replace(/[&<>\"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
 async function fileToDataURL(file){ return await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(file); }); }
 
-// ====== socket 接続 ======
+// ====== 接続 ======
 const roomId = new URL(location.href).searchParams.get('room') || 'default';
 const socket = io('/', { auth: { room: roomId } });
 
-let MAX_ROUNDS = 5;
-let players = [];
-let draft = { aLocked:false,bLocked:false,aPicks:[],bPicks:[],teamA:[],teamB:[] };
+let MAX_ROUNDS = 5; let TEAM_IDS = ['A','B'];
+let players = []; let draft = { locks:{}, picks:{}, teams:{} };
+let imageFiles = [];
+let currentSort = null; // 'high'|'low'|null
 
-socket.on('state:init', ({ state, maxRounds }) => {
-  MAX_ROUNDS = maxRounds; document.getElementById('maxRoundsLab').textContent = String(MAX_ROUNDS);
-  players = state.players; draft = state.draft; renderAll();
+socket.on('state:init', ({ state, maxRounds, teams })=>{
+  MAX_ROUNDS = maxRounds; TEAM_IDS = teams;
+  document.getElementById('maxRoundsLab').textContent = String(MAX_ROUNDS);
+  players = state.players; draft = state.draft;
+  renderAll(); buildLoginCards(); buildTeamPanels(); fetchImages();
 });
-socket.on('players:updated', (list) => { players = list; renderPlayers(); renderDraftPickers(); renderTeams(); });
-socket.on('draft:picksUpdated', ({aPicks,bPicks}) => { draft.aPicks=aPicks; draft.bPicks=bPicks; renderDraftPickers(); });
-socket.on('draft:locksUpdated', ({aLocked,bLocked}) => { draft.aLocked=aLocked; draft.bLocked=bLocked; renderDraftPickers(); });
-socket.on('draft:resolved', ({draft: d, logs}) => { draft=d; logs.forEach(line=>appendLog(line)); renderDraftPickers(); renderTeams(); });
-socket.on('state:updated', (state) => { players=state.players; draft=state.draft; renderAll(); });
 
-// ====== タブ切替 ======
+socket.on('players:updated', (list)=>{ players=list; renderPlayers(); refreshPickers(); renderTeams(); });
+socket.on('draft:picksUpdated', (picks)=>{ draft.picks=picks; refreshPickers(); });
+socket.on('draft:locksUpdated', (locks)=>{ draft.locks=locks; refreshPickers(); });
+socket.on('draft:resolved', ({draft: d, logs})=>{ draft=d; logs.forEach(appendLog); refreshPickers(); renderTeams(); });
+socket.on('state:updated', (state)=>{ players=state.players; draft=state.draft; renderAll(); buildLoginCards(); buildTeamPanels(); });
+socket.on('action:err', ({message})=> alert(message));
+socket.on('leader:ok', ({role})=>{ const area=document.getElementById('area'+role); if(area) area.classList.remove('hidden'); });
+socket.on('leader:err', ({message})=> alert(message));
+socket.on('player:updated:ok', ({id})=>{
+  alert('編集を保存しました');
+  document.getElementById('editId').value='';
+  document.getElementById('btnRegister').textContent='登録する / 上書き保存';
+});
+
+// ====== タブ ======
 const tabs = document.querySelectorAll('.tab');
 const panels = { register:panel('register'), players:panel('players'), draft:panel('draft'), backup:panel('backup') };
-function panel(id){ return document.getElementById('panel-'+id) }
+function panel(id){ return document.getElementById('panel-'+id); }
 for(const t of tabs){
-  t.addEventListener('click',()=>{
+  t.addEventListener('click', ()=>{
     tabs.forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
     Object.values(panels).forEach(p=>p.classList.add('hidden'));
     panels[t.dataset.panel].classList.remove('hidden');
     if(t.dataset.panel==='players') renderPlayers();
-    if(t.dataset.panel==='draft') renderDraftPickers();
+    if(t.dataset.panel==='draft'){ refreshPickers(); renderTeams(); }
   });
 }
 
-// ====== 登録 ======
+// ====== ランク→ポイント ======
 const rankEl = document.getElementById('pRank');
 const pointLabel = document.getElementById('autoPoint');
 function updatePoint(){ pointLabel.textContent = POINTS_BY_RANK[rankEl.value] ?? '-' } updatePoint();
 rankEl.addEventListener('change', updatePoint);
 
+// ====== アバター（オプション） ======
 const avatarInput = document.getElementById('pAvatar');
 const avatarPreview = document.getElementById('avatarPreview');
 avatarInput.addEventListener('change', async (e)=>{ const f=e.target.files?.[0]; avatarPreview.src = f? await fileToDataURL(f): '' });
 
-const pokeFiles = [...document.querySelectorAll('.pokeFile')];
+// ====== 画像一覧（/images）→ 使用ポケモン選択 ======
+const pokeSelects = [...document.querySelectorAll('.pokeSelect')];
 const pokePreviews = [0,1,2].map(i=>document.getElementById('pokePrev'+i));
-for(const pf of pokeFiles){
-  pf.addEventListener('change', async e=>{
-    const slot=Number(e.target.dataset.slot);
-    const f=e.target.files?.[0];
-    pokePreviews[slot].src = f? await fileToDataURL(f): '';
-  });
+async function fetchImages(){
+  const r = await fetch('/api/images',{cache:'no-store'}).then(r=>r.json()).catch(()=>({files:[]}));
+  imageFiles = r.files||[];
+  for(const sel of pokeSelects){
+    sel.innerHTML = '<option value="">（選択しない）</option>' + imageFiles.map(f=>`<option value="/images/${f}">${f}</option>`).join('');
+    sel.addEventListener('change', (e)=>{ const slot=Number(e.target.dataset.slot); const val=e.target.value; pokePreviews[slot].src = val || ''; });
+  }
 }
 
+// ====== 登録/編集 ======
 const form = document.getElementById('playerForm');
 form.addEventListener('submit', async (e)=>{
   e.preventDefault();
+  const actionPass = prompt('操作パスワードを入力してください'); if(!actionPass) return;
+
   const name = document.getElementById('pName').value.trim(); if(!name) return alert('名前');
   const rank = rankEl.value; const comment = document.getElementById('pComment').value.trim();
   const avatar = avatarPreview.src || '';
   const pokes = [0,1,2].map(i=>pokePreviews[i].src||'').filter(Boolean);
-  if(pokes.length<3 && !confirm('ポケモン画像が3枚未満です。このまま登録しますか？')) return;
-  socket.emit('player:add', { name, rank, avatar, pokes: pokes.slice(0,3), comment });
+  if(pokes.length<3 && !confirm('ポケモンが3枚未満です。このまま続行しますか？')) return;
+
+  const editingId = document.getElementById('editId').value.trim();
+  const payload = { actionPass, name, rank, avatar, pokes: pokes.slice(0,3), comment };
+
+  if(editingId){
+    socket.emit('player:update', { id: editingId, ...payload });
+  }else{
+    socket.emit('player:add', payload);
+  }
+
   form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint();
+  if(editingId){ document.getElementById('editId').value=''; document.getElementById('btnRegister').textContent='登録する / 上書き保存'; }
 });
 
-document.getElementById('resetForm').addEventListener('click',()=>{
+document.getElementById('resetForm').addEventListener('click', ()=>{
   form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint();
+  document.getElementById('editId').value=''; document.getElementById('btnRegister').textContent='登録する / 上書き保存';
 });
 
-// ====== 一覧 ======
+// ====== 一覧・並び替え・個別削除・編集起動 ======
 const playerListEl = document.getElementById('playerList');
 const playerCountEl = document.getElementById('playerCount');
-playerListEl.addEventListener('click',(e)=>{
+
+document.getElementById('sortHigh').addEventListener('click', ()=>{ currentSort='high'; renderPlayers(); });
+document.getElementById('sortLow').addEventListener('click', ()=>{ currentSort='low'; renderPlayers(); });
+
+document.getElementById('clearAll').addEventListener('click', ()=>{
+  const actionPass = prompt('操作パスワード（全削除）'); if(!actionPass) return;
+  if(confirm('本当に全削除しますか？')) socket.emit('players:clearAll', { actionPass });
+});
+
+playerListEl.addEventListener('click', (e)=>{
   const btn = e.target.closest('button'); if(!btn) return;
   const id = btn.dataset.id; const act = btn.dataset.act;
-  if(act==='del') socket.emit('player:del',{id});
+
+  if(act==='del'){
+    const actionPass = prompt('操作パスワード（削除）'); if(!actionPass) return;
+    if(confirm('この選手を削除しますか？')) socket.emit('player:delOne', { id, actionPass });
+
+  }else if(act==='edit'){
+    const actionPass = prompt('操作パスワード（編集を開始）'); if(!actionPass) return;
+    // ここでは「開始時にもパスを要求」。保存時は server 側で再チェック。
+    const p = players.find(x=>x.id===id); if(!p) return;
+    // 登録タブに移動してフォームに流し込み
+    document.querySelector('[data-panel="register"]').click();
+    document.getElementById('pName').value = p.name;
+    document.getElementById('pRank').value = p.rank; updatePoint();
+    document.getElementById('pComment').value = p.comment || '';
+    document.getElementById('editId').value = p.id;
+    document.getElementById('btnRegister').textContent = '編集を保存';
+    avatarPreview.src = p.avatar || '';
+    p.pokes?.forEach((src,i)=>{ if(pokePreviews[i]) pokePreviews[i].src = src; });
+    // セレクトの値も反映（ファイル名一致時のみ）
+    pokeSelects.forEach((sel,idx)=>{ const src=p.pokes?.[idx]||''; const val = imageFiles.find(f=>(`/images/${f}`)===src) ? src : ''; sel.value = val; });
+  }
 });
+
 function renderPlayers(){
   playerCountEl.textContent = players.length;
-  playerListEl.innerHTML = players.map(p=>`
+  let list = players.slice();
+  if(currentSort==='high') list.sort((a,b)=> (b.points||0)-(a.points||0));
+  if(currentSort==='low')  list.sort((a,b)=> (a.points||0)-(b.points||0));
+
+  playerListEl.innerHTML = list.map(p=>`
     <div class="card">
       <div class="row">
         <img class="avatar" src="${p.avatar||''}" alt="avatar" onerror="this.style.display='none'">
@@ -289,80 +320,121 @@ function renderPlayers(){
           <div class="note" style="white-space:pre-wrap;margin-top:4px">${escapeHTML(p.comment||'')}</div>
           <div class="row" style="margin-top:6px">${(p.pokes||[]).map(src=>`<img class='pokeThumb' src='${src}' alt='poke'>`).join('')}</div>
           <div class="row" style="margin-top:8px">
-            <button class="btn bad" data-act="del" data-id="${p.id}">削除</button>
+            <button class="btn"      data-act="edit" data-id="${p.id}">編集</button>
+            <button class="btn bad"  data-act="del"  data-id="${p.id}">削除</button>
           </div>
         </div>
       </div>
     </div>`).join('');
 }
 
-// ====== ドラフト ======
-const loginA = document.getElementById('loginA');
-const loginB = document.getElementById('loginB');
-const passA = document.getElementById('passA');
-const passB = document.getElementById('passB');
-const aArea = document.getElementById('aArea');
-const bArea = document.getElementById('bArea');
-const aPicksTbody = document.getElementById('aPicks');
-const bPicksTbody = document.getElementById('bPicks');
-const lockA = document.getElementById('lockA');
-const lockB = document.getElementById('lockB');
-const teamAEl = document.getElementById('teamA');
-const teamBEl = document.getElementById('teamB');
+// ====== ドラフト（6チーム） ======
+const loginGrid = document.getElementById('loginGrid');
+const teamsGrid = document.getElementById('teamsGrid');
 const logEl = document.getElementById('log');
 
-loginA.addEventListener('click',()=> socket.emit('leader:login',{pass:passA.value}));
-loginB.addEventListener('click',()=> socket.emit('leader:login',{pass:passB.value}));
+function buildLoginCards(){
+  loginGrid.innerHTML = TEAM_IDS.map(t=>`
+    <div class="card">
+      <h3>リーダー${t} ログイン</h3>
+      <div class="row">
+        <input type="password" id="pass${t}" placeholder="パスワード">
+        <button class="btn" data-login="${t}">入室</button>
+      </div>
+      <div id="area${t}" class="hidden">
+        <div class="row" style="justify-content:space-between;align-items:center;margin-top:8px">
+          <div class="pill">${t}のピック</div>
+          <button class="btn" data-lock="${t}">ロック</button>
+        </div>
+        <table class="table" style="margin-top:6px">
+          <thead><tr><th>#</th><th>選手</th></tr></thead>
+          <tbody id="picks${t}"></tbody>
+        </table>
+      </div>
+    </div>`).join('');
 
-socket.on('leader:ok', ({role})=>{
-  if(role==='A') aArea.classList.remove('hidden');
-  if(role==='B') bArea.classList.remove('hidden');
-});
-socket.on('leader:err', ({message})=> alert(message));
-
-function buildPickRow(side, round){
-  const tr = document.createElement('tr');
-  const used = new Set([...draft.teamA, ...draft.teamB]);
-  const opts = players.filter(p=>!used.has(p.id));
-  tr.innerHTML = `<td class="center">${round+1}</td><td><select data-side="${side}" data-round="${round}" ${ (side==='a'&&draft.aLocked)||(side==='b'&&draft.bLocked) ? 'disabled':'' }><option value="">（未選択）</option>${opts.map(p=>`<option value="${p.id}">${escapeHTML(p.name)}（${p.points}pt）</option>`).join('')}</select></td>`;
-  const sel = tr.querySelector('select');
-  const current = (side==='a'?draft.aPicks:draft.bPicks)[round] || '';
-  sel.value = current;
-  sel.addEventListener('change', ()=> socket.emit('draft:pick', { side, round, playerId: sel.value }));
-  return tr;
+  loginGrid.querySelectorAll('button[data-login]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const t = btn.dataset.login;
+      const pass = document.getElementById('pass'+t).value;
+      socket.emit('leader:login',{pass});
+    });
+  });
 }
-function renderDraftPickers(){
-  aPicksTbody.innerHTML=''; bPicksTbody.innerHTML='';
-  for(let i=0;i<MAX_ROUNDS;i++){
-    aPicksTbody.appendChild(buildPickRow('a',i));
-    bPicksTbody.appendChild(buildPickRow('b',i));
+
+function buildTeamPanels(){
+  teamsGrid.innerHTML = TEAM_IDS.map(t=>`
+    <div class="card">
+      <h3>チーム${t}</h3>
+      <div id="team${t}"></div>
+    </div>`).join('');
+}
+
+function refreshPickers(){
+  for(const t of TEAM_IDS){
+    const tbody = document.getElementById('picks'+t); if(!tbody) continue;
+    tbody.innerHTML = '';
+    const used = new Set(TEAM_IDS.flatMap(x=> draft.teams?.[x] || []));
+    for(let i=0;i<MAX_ROUNDS;i++){
+      const tr = document.createElement('tr');
+      const opts = players.filter(p=>!used.has(p.id));
+      tr.innerHTML = `<td class="center">${i+1}</td>
+        <td><select data-t="${t}" data-r="${i}" ${ draft.locks?.[t] ? 'disabled':'' }>
+        <option value="">（未選択）</option>
+        ${opts.map(p=>`<option value="${p.id}">${escapeHTML(p.name)}（${p.points}pt）</option>`).join('')}</select></td>`;
+      const sel = tr.querySelector('select');
+      sel.value = draft.picks?.[t]?.[i] || '';
+      sel.addEventListener('change', ()=> socket.emit('draft:pick', { team:t, round:i, playerId: sel.value }));
+      tbody.appendChild(tr);
+    }
+    const lockBtn = loginGrid.querySelector(`button[data-lock="${t}"]`);
+    if(lockBtn){ lockBtn.textContent = draft.locks?.[t] ? '解除' : 'ロック';
+      lockBtn.onclick = ()=> socket.emit('draft:lock', { team:t, locked: !draft.locks?.[t] });
+    }
   }
-  lockA.textContent = draft.aLocked? '解除' : 'ロック';
-  lockB.textContent = draft.bLocked? '解除' : 'ロック';
 }
 
-lockA.addEventListener('click',()=> socket.emit('draft:lock', { side:'a', locked: !draft.aLocked }));
-lockB.addEventListener('click',()=> socket.emit('draft:lock', { side:'b', locked: !draft.bLocked }));
+function renderTeams(){
+  for(const t of TEAM_IDS){
+    const el = document.getElementById('team'+t); if(!el) continue;
+    const ids = draft.teams?.[t] || [];
+    if(!ids.length){ el.innerHTML = '<div class="note">未決定</div>'; continue; }
+    const rows = ids.map((id,i)=>{
+      const p = players.find(x=>x.id===id); if(!p) return '';
+      return `<div class="row" style="margin:6px 0">
+        <span class="pill">${i+1}</span>
+        <img class="avatar" src="${p.avatar||''}" alt="av" onerror="this.style.display='none'">
+        <div><div style="font-weight:600">${escapeHTML(p.name)} <span class="tag">${p.points}pt</span></div>
+        <div class="note">${escapeHTML(p.rank)}</div></div></div>`;
+    }).join('');
+    const total = ids.reduce((s,id)=> s + (players.find(x=>x.id===id)?.points||0), 0);
+    el.innerHTML = rows + `<div class="hr"></div><div class="right">合計ポイント：<strong>${total}</strong></div>`;
+  }
+}
+
+function appendLog(line){ const time=new Date().toLocaleTimeString('ja-JP',{hour12:false}); logEl.innerHTML += `<div>[${time}] ${line}</div>`; logEl.scrollTop = logEl.scrollHeight; }
 
 document.getElementById('resetDraft').addEventListener('click',()=> socket.emit('draft:reset'));
 document.getElementById('reveal').addEventListener('click',()=> socket.emit('draft:reveal'));
 
-function renderTeams(){
-  teamAEl.innerHTML = renderTeamList(draft.teamA);
-  teamBEl.innerHTML = renderTeamList(draft.teamB);
-}
-function renderTeamList(ids){
-  if(!ids.length) return '<div class="note">未決定</div>';
-  const rows = ids.map((id,i)=>{
-    const p = players.find(x=>x.id===id); if(!p) return '';
-    return `<div class="row" style="margin:6px 0"><span class="pill">${i+1}</span><img class="avatar" src="${p.avatar||''}" alt="av" onerror="this.style.display='none'"> <div><div style="font-weight:600">${escapeHTML(p.name)} <span class=tag>${p.points}pt</span></div><div class=note>${escapeHTML(p.rank)}</div></div></div>`;
-  }).join('');
-  const total = ids.reduce((s,id)=> s + (players.find(x=>x.id===id)?.points||0), 0);
-  return rows + `<div class=hr></div><div class=right>合計ポイント：<strong>${total}</strong></div>`;
-}
-function appendLog(html){ const time=new Date().toLocaleTimeString('ja-JP',{hour12:false}); logEl.innerHTML += `<div>[${time}] ${html}</div>`; logEl.scrollTop = logEl.scrollHeight; }
+function renderAll(){ renderPlayers(); buildLoginCards(); refreshPickers(); buildTeamPanels(); renderTeams(); }
 
-function renderAll(){ renderPlayers(); renderDraftPickers(); renderTeams(); }
+// ====== バックアップ ======
+const exportBtn = document.getElementById('exportBtn');
+exportBtn.addEventListener('click', ()=>{
+  const actionPass = prompt('操作パスワード（書き出し）'); if(!actionPass) return;
+  socket.emit('backup:export', { actionPass });
+});
+const importFile = document.getElementById('importFile');
+importFile.addEventListener('change', async (e)=>{
+  const f = e.target.files?.[0]; if(!f) return; const text = await f.text();
+  try{ const data = JSON.parse(text); socket.emit('backup:import', data); alert('読み込み完了'); }catch{ alert('JSONが不正です'); }
+});
+socket.on('backup:data', (data)=>{
+  const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const url = URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download='unite_draft_backup.json'; a.click(); URL.revokeObjectURL(url);
+});
 </script>
 </body>
 </html>
