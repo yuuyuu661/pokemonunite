@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ポケモンユナイト 選手登録 & ドラフト（リアルタイム）</title>
+  <style>
+    :root{--bg:#0f172a;--card:#111827;--sub:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--acc:#22d3ee;--good:#34d399;--bad:#f87171}
+    html,body{margin:0;padding:0;background:linear-gradient(180deg,#0b1220,#0f172a 40%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    .wrap{max-width:1200px;margin:24px auto;padding:0 16px 80px}
+    .tabs{display:flex;gap:8px;flex-wrap:wrap}
+    .tab{background:var(--sub);border:1px solid #374151;border-bottom:none;border-top-left-radius:10px;border-top-right-radius:10px;padding:10px 14px;cursor:pointer;color:var(--muted)}
+    .tab.active{background:var(--card);color:var(--text)}
+    .panel{background:var(--card);border:1px solid #374151;border-radius:12px;padding:18px}
+    .grid{display:grid;gap:12px}
+    .g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+    @media (max-width:900px){.g2,.g3{grid-template-columns:1fr}}
+    input[type=text],input[type=password],select,textarea{width:100%;padding:10px;border-radius:10px;background:#0b1220;border:1px solid #233047;color:var(--text)}
+    textarea{min-height:72px;resize:vertical}
+    .btn{display:inline-flex;align-items:center;gap:8px;border-radius:12px;padding:10px 14px;border:1px solid #324256;background:#152238;color:var(--text);cursor:pointer}
+    .btn.acc{background:linear-gradient(180deg,#1cc9ff,#22d3ee);color:#03121a;border:none}
+    .btn.bad{background:#361e1e;border-color:#7a1f1f}
+    .card{background:linear-gradient(180deg,#0e1627,#0a1220);border:1px solid #293042;border-radius:12px;padding:12px}
+    .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .avatar{width:72px;height:72px;border-radius:10px;object-fit:cover;border:1px solid #263244;background:#0b1220}
+    .pokeThumb{width:68px;height:68px;border-radius:10px;object-fit:contain;border:1px dashed #2a3a56;background:#0b1220}
+    .tag{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid #2a3a56;color:#9bd5ff}
+    .pill{border-radius:999px;padding:4px 10px;border:1px solid #304057;background:#0d1626;color:#a8d6ff;font-size:12px}
+    .list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+    .hidden{display:none}
+    .hr{height:1px;background:#22314a;margin:12px 0;border:0}
+    .note{font-size:12px;color:#cbd5e1}
+    .table{width:100%;border-collapse:collapse}
+    .table th,.table td{border-bottom:1px solid #2a344a;padding:8px 6px;text-align:left}
+    .center{text-align:center}
+    .right{text-align:right}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🟣 ポケユナ選手登録 & ドラフト（リアルタイム）</h1>
+  <div class="note">URLに <code>?room=任意文字列</code> を付けると別ルームになります（例：<code>?room=finals</code>）。未指定は <code>default</code>。</div>
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-panel="register">① 選手登録</button>
+    <button class="tab" data-panel="players">登録一覧</button>
+    <button class="tab" data-panel="draft">② ドラフト</button>
+    <button class="tab" data-panel="backup">バックアップ</button>
+  </div>
+
+  <!-- Register Panel -->
+  <section class="panel" id="panel-register">
+    <form id="playerForm" class="grid g2">
+      <div>
+        <label>プレイヤー名</label>
+        <input type="text" id="pName" required placeholder="例：ユウヤ" />
+      </div>
+      <div>
+        <label>ランク</label>
+        <select id="pRank" required>
+          <option value="ビギナー">ビギナー</option>
+          <option value="スーパー">スーパー</option>
+          <option value="ハイパー">ハイパー</option>
+          <option value="エリート">エリート</option>
+          <option value="エキスパート">エキスパート</option>
+          <option value="マスター1200">マスター1200</option>
+          <option value="マスター1400～1600">マスター1400～1600</option>
+        </select>
+        <div class="note">ポイント（自動）：<span id="autoPoint" class="pill">-</span></div>
+      </div>
+      <div>
+        <label>プレイヤー画像（アップロード）</label>
+        <input type="file" id="pAvatar" accept="image/*">
+        <div class="row" style="margin-top:8px"><img id="avatarPreview" class="avatar" alt="preview"></div>
+      </div>
+      <div>
+        <label>意気込み</label>
+        <textarea id="pComment" placeholder="例：絶対勝ちます！連携重視で行きます"></textarea>
+      </div>
+
+      <div class="g3">
+        <div>
+          <label>使用ポケモン①（画像 or アップ）</label>
+          <input type="file" class="pokeFile" data-slot="0" accept="image/*">
+          <div class="row" style="margin-top:6px"><img class="pokeThumb" id="pokePrev0" alt="poke1"></div>
+        </div>
+        <div>
+          <label>使用ポケモン②（画像 or アップ）</label>
+          <input type="file" class="pokeFile" data-slot="1" accept="image/*">
+          <div class="row" style="margin-top:6px"><img class="pokeThumb" id="pokePrev1" alt="poke2"></div>
+        </div>
+        <div>
+          <label>使用ポケモン③（画像 or アップ）</label>
+          <input type="file" class="pokeFile" data-slot="2" accept="image/*">
+          <div class="row" style="margin-top:6px"><img class="pokeThumb" id="pokePrev2" alt="poke3"></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <button type="submit" class="btn acc">登録する</button>
+        <button type="button" id="resetForm" class="btn">リセット</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Players Panel -->
+  <section class="panel hidden" id="panel-players">
+    <div class="row" style="justify-content:space-between">
+      <div class="note">登録人数：<span id="playerCount">0</span></div>
+      <div class="row">
+        <button id="clearAll" class="btn bad">全削除</button>
+      </div>
+    </div>
+    <div class="hr"></div>
+    <div id="playerList" class="list"></div>
+  </section>
+
+  <!-- Draft Panel -->
+  <section class="panel hidden" id="panel-draft">
+    <div class="grid g2">
+      <div class="card">
+        <h3>リーダーA ログイン</h3>
+        <div class="row">
+          <input type="password" id="passA" placeholder="パスワードABC">
+          <button class="btn" id="loginA">入室</button>
+        </div>
+        <div id="aArea" class="hidden">
+          <div class="row" style="justify-content:space-between;align-items:center;margin-top:8px">
+            <div class="pill">Aのピック</div>
+            <button class="btn" id="lockA">ロック</button>
+          </div>
+          <table class="table" style="margin-top:6px"><thead><tr><th>#</th><th>選手</th></tr></thead><tbody id="aPicks"></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <h3>リーダーB ログイン</h3>
+        <div class="row">
+          <input type="password" id="passB" placeholder="パスワードDEF">
+          <button class="btn" id="loginB">入室</button>
+        </div>
+        <div id="bArea" class="hidden">
+          <div class="row" style="justify-content:space-between;align-items:center;margin-top:8px">
+            <div class="pill">Bのピック</div>
+            <button class="btn" id="lockB">ロック</button>
+          </div>
+          <table class="table" style="margin-top:6px"><thead><tr><th>#</th><th>選手</th></tr></thead><tbody id="bPicks"></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div class="row">
+        <span class="pill">ドラフトラウンド：1〜<span id="maxRoundsLab"></span></span>
+        <button class="btn acc" id="reveal">同時公開 & 解決</button>
+        <button class="btn" id="resetDraft">ドラフト初期化</button>
+      </div>
+      <div class="note">※ 競合はダイス（d6）で決定</div>
+    </div>
+
+    <div class="grid g2" style="margin-top:12px">
+      <div class="card">
+        <h3>チームA</h3>
+        <div id="teamA"></div>
+      </div>
+      <div class="card">
+        <h3>チームB</h3>
+        <div id="teamB"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <h3>ログ</h3>
+      <div id="log" class="note"></div>
+    </div>
+  </section>
+
+  <!-- Backup Panel -->
+  <section class="panel hidden" id="panel-backup">
+    <div class="grid g2">
+      <div>
+        <h3>エクスポート</h3>
+        <button class="btn" id="exportBtn">JSONを書き出す</button>
+      </div>
+      <div>
+        <h3>インポート</h3>
+        <input type="file" id="importFile" accept="application/json">
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- Socket.IO クライアント（サーバーから供給されるビルトイン） -->
+<script src="/socket.io/socket.io.js"></script>
+<script>
+// ====== util ======
+const POINTS_BY_RANK = {
+  'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,
+  'エキスパート':15,'マスター1200':15,'マスター1400～1600':20,
+};
+function escapeHTML(s){ return (s||'').replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
+async function fileToDataURL(file){ return await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(file); }); }
+
+// ====== socket 接続 ======
+const roomId = new URL(location.href).searchParams.get('room') || 'default';
+const socket = io('/', { auth: { room: roomId } });
+
+let MAX_ROUNDS = 5;
+let players = [];
+let draft = { aLocked:false,bLocked:false,aPicks:[],bPicks:[],teamA:[],teamB:[] };
+
+socket.on('state:init', ({ state, maxRounds }) => {
+  MAX_ROUNDS = maxRounds; document.getElementById('maxRoundsLab').textContent = String(MAX_ROUNDS);
+  players = state.players; draft = state.draft; renderAll();
+});
+socket.on('players:updated', (list) => { players = list; renderPlayers(); renderDraftPickers(); renderTeams(); });
+socket.on('draft:picksUpdated', ({aPicks,bPicks}) => { draft.aPicks=aPicks; draft.bPicks=bPicks; renderDraftPickers(); });
+socket.on('draft:locksUpdated', ({aLocked,bLocked}) => { draft.aLocked=aLocked; draft.bLocked=bLocked; renderDraftPickers(); });
+socket.on('draft:resolved', ({draft: d, logs}) => { draft=d; logs.forEach(line=>appendLog(line)); renderDraftPickers(); renderTeams(); });
+socket.on('state:updated', (state) => { players=state.players; draft=state.draft; renderAll(); });
+
+// ====== タブ切替 ======
+const tabs = document.querySelectorAll('.tab');
+const panels = { register:panel('register'), players:panel('players'), draft:panel('draft'), backup:panel('backup') };
+function panel(id){ return document.getElementById('panel-'+id) }
+for(const t of tabs){
+  t.addEventListener('click',()=>{
+    tabs.forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    Object.values(panels).forEach(p=>p.classList.add('hidden'));
+    panels[t.dataset.panel].classList.remove('hidden');
+    if(t.dataset.panel==='players') renderPlayers();
+    if(t.dataset.panel==='draft') renderDraftPickers();
+  });
+}
+
+// ====== 登録 ======
+const rankEl = document.getElementById('pRank');
+const pointLabel = document.getElementById('autoPoint');
+function updatePoint(){ pointLabel.textContent = POINTS_BY_RANK[rankEl.value] ?? '-' } updatePoint();
+rankEl.addEventListener('change', updatePoint);
+
+const avatarInput = document.getElementById('pAvatar');
+const avatarPreview = document.getElementById('avatarPreview');
+avatarInput.addEventListener('change', async (e)=>{ const f=e.target.files?.[0]; avatarPreview.src = f? await fileToDataURL(f): '' });
+
+const pokeFiles = [...document.querySelectorAll('.pokeFile')];
+const pokePreviews = [0,1,2].map(i=>document.getElementById('pokePrev'+i));
+for(const pf of pokeFiles){
+  pf.addEventListener('change', async e=>{
+    const slot=Number(e.target.dataset.slot);
+    const f=e.target.files?.[0];
+    pokePreviews[slot].src = f? await fileToDataURL(f): '';
+  });
+}
+
+const form = document.getElementById('playerForm');
+form.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const name = document.getElementById('pName').value.trim(); if(!name) return alert('名前');
+  const rank = rankEl.value; const comment = document.getElementById('pComment').value.trim();
+  const avatar = avatarPreview.src || '';
+  const pokes = [0,1,2].map(i=>pokePreviews[i].src||'').filter(Boolean);
+  if(pokes.length<3 && !confirm('ポケモン画像が3枚未満です。このまま登録しますか？')) return;
+  socket.emit('player:add', { name, rank, avatar, pokes: pokes.slice(0,3), comment });
+  form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint();
+});
+
+document.getElementById('resetForm').addEventListener('click',()=>{
+  form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint();
+});
+
+// ====== 一覧 ======
+const playerListEl = document.getElementById('playerList');
+const playerCountEl = document.getElementById('playerCount');
+playerListEl.addEventListener('click',(e)=>{
+  const btn = e.target.closest('button'); if(!btn) return;
+  const id = btn.dataset.id; const act = btn.dataset.act;
+  if(act==='del') socket.emit('player:del',{id});
+});
+function renderPlayers(){
+  playerCountEl.textContent = players.length;
+  playerListEl.innerHTML = players.map(p=>`
+    <div class="card">
+      <div class="row">
+        <img class="avatar" src="${p.avatar||''}" alt="avatar" onerror="this.style.display='none'">
+        <div style="min-width:0">
+          <div style="font-weight:600">${escapeHTML(p.name)} <span class="tag">${escapeHTML(p.rank)} / ${p.points}pt</span></div>
+          <div class="note" style="white-space:pre-wrap;margin-top:4px">${escapeHTML(p.comment||'')}</div>
+          <div class="row" style="margin-top:6px">${(p.pokes||[]).map(src=>`<img class='pokeThumb' src='${src}' alt='poke'>`).join('')}</div>
+          <div class="row" style="margin-top:8px">
+            <button class="btn bad" data-act="del" data-id="${p.id}">削除</button>
+          </div>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+// ====== ドラフト ======
+const loginA = document.getElementById('loginA');
+const loginB = document.getElementById('loginB');
+const passA = document.getElementById('passA');
+const passB = document.getElementById('passB');
+const aArea = document.getElementById('aArea');
+const bArea = document.getElementById('bArea');
+const aPicksTbody = document.getElementById('aPicks');
+const bPicksTbody = document.getElementById('bPicks');
+const lockA = document.getElementById('lockA');
+const lockB = document.getElementById('lockB');
+const teamAEl = document.getElementById('teamA');
+const teamBEl = document.getElementById('teamB');
+const logEl = document.getElementById('log');
+
+loginA.addEventListener('click',()=> socket.emit('leader:login',{pass:passA.value}));
+loginB.addEventListener('click',()=> socket.emit('leader:login',{pass:passB.value}));
+
+socket.on('leader:ok', ({role})=>{
+  if(role==='A') aArea.classList.remove('hidden');
+  if(role==='B') bArea.classList.remove('hidden');
+});
+socket.on('leader:err', ({message})=> alert(message));
+
+function buildPickRow(side, round){
+  const tr = document.createElement('tr');
+  const used = new Set([...draft.teamA, ...draft.teamB]);
+  const opts = players.filter(p=>!used.has(p.id));
+  tr.innerHTML = `<td class="center">${round+1}</td><td><select data-side="${side}" data-round="${round}" ${ (side==='a'&&draft.aLocked)||(side==='b'&&draft.bLocked) ? 'disabled':'' }><option value="">（未選択）</option>${opts.map(p=>`<option value="${p.id}">${escapeHTML(p.name)}（${p.points}pt）</option>`).join('')}</select></td>`;
+  const sel = tr.querySelector('select');
+  const current = (side==='a'?draft.aPicks:draft.bPicks)[round] || '';
+  sel.value = current;
+  sel.addEventListener('change', ()=> socket.emit('draft:pick', { side, round, playerId: sel.value }));
+  return tr;
+}
+function renderDraftPickers(){
+  aPicksTbody.innerHTML=''; bPicksTbody.innerHTML='';
+  for(let i=0;i<MAX_ROUNDS;i++){
+    aPicksTbody.appendChild(buildPickRow('a',i));
+    bPicksTbody.appendChild(buildPickRow('b',i));
+  }
+  lockA.textContent = draft.aLocked? '解除' : 'ロック';
+  lockB.textContent = draft.bLocked? '解除' : 'ロック';
+}
+
+lockA.addEventListener('click',()=> socket.emit('draft:lock', { side:'a', locked: !draft.aLocked }));
+lockB.addEventListener('click',()=> socket.emit('draft:lock', { side:'b', locked: !draft.bLocked }));
+
+document.getElementById('resetDraft').addEventListener('click',()=> socket.emit('draft:reset'));
+document.getElementById('reveal').addEventListener('click',()=> socket.emit('draft:reveal'));
+
+function renderTeams(){
+  teamAEl.innerHTML = renderTeamList(draft.teamA);
+  teamBEl.innerHTML = renderTeamList(draft.teamB);
+}
+function renderTeamList(ids){
+  if(!ids.length) return '<div class="note">未決定</div>';
+  const rows = ids.map((id,i)=>{
+    const p = players.find(x=>x.id===id); if(!p) return '';
+    return `<div class="row" style="margin:6px 0"><span class="pill">${i+1}</span><img class="avatar" src="${p.avatar||''}" alt="av" onerror="this.style.display='none'"> <div><div style="font-weight:600">${escapeHTML(p.name)} <span class=tag>${p.points}pt</span></div><div class=note>${escapeHTML(p.rank)}</div></div></div>`;
+  }).join('');
+  const total = ids.reduce((s,id)=> s + (players.find(x=>x.id===id)?.points||0), 0);
+  return rows + `<div class=hr></div><div class=right>合計ポイント：<strong>${total}</strong></div>`;
+}
+function appendLog(html){ const time=new Date().toLocaleTimeString('ja-JP',{hour12:false}); logEl.innerHTML += `<div>[${time}] ${html}</div>`; logEl.scrollTop = logEl.scrollHeight; }
+
+function renderAll(){ renderPlayers(); renderDraftPickers(); renderTeams(); }
+</script>
+</body>
+</html>
