@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ポケユナ 選手登録 & 9チームドラフト（逐次進行 / d100）</title>
+  <title>ポケユナ 選手登録 & 9チームドラフト（逐次 / d100）</title>
   <style>
     :root{--bg:#0f172a;--card:#111827;--sub:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--acc:#22d3ee;--good:#34d399;--bad:#f87171;--warn:#f59e0b}
     html,body{margin:0;padding:0;background:linear-gradient(180deg,#0b1220,#0f172a 40%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
@@ -136,6 +136,7 @@
         <span class="pill">Cycle: <span id="cycleLab">-</span></span>
         <span class="pill">Round: <span id="roundLab">-</span></span>
         <span class="pill">Max Team: <span id="maxTeamLab">-</span></span>
+        <span class="pill" id="requireLocksLab">Locks Required: -</span>
       </div>
     </div>
 
@@ -148,7 +149,7 @@
         <button class="btn warn" id="nextStep" disabled>次</button>
         <button class="btn" id="resetDraft">ドラフト初期化</button>
       </div>
-      <div class="note">※ ラウンドごとに「全チームロック」後、「次」で公開＆d100解決 → 次ラウンドへ進行</div>
+      <div class="note" id="progressNote">※ ロックは任意。未ロックがいても「次」で公開＆d100解決します。</div>
     </div>
 
     <div class="teamGrid" id="teamsGrid"></div>
@@ -187,14 +188,19 @@ function badge(txt, cls='pill'){ return `<span class="${cls}">${txt}</span>`; }
 const roomId = new URL(location.href).searchParams.get('room') || 'default';
 const socket = io('/', { auth: { room: roomId } });
 
-let MAX_ROUNDS = 5; let MAX_TEAM = 5; let TEAM_IDS = ['A','B'];
+let MAX_ROUNDS = 5; let MAX_TEAM = 5; let TEAM_IDS = ['A','B']; let REQUIRE_LOCKS = false;
 let players = []; let draft = { locks:{}, picks:{}, teams:{}, state:{mode:'idle',cycle:1,round:0} };
 let imageFiles = [];
 let currentSort = null;
 
-socket.on('state:init', ({ state, maxRounds, teams, maxTeam })=>{
-  MAX_ROUNDS = maxRounds; TEAM_IDS = teams; MAX_TEAM = maxTeam;
+socket.on('state:init', ({ state, maxRounds, teams, maxTeam, requireLocks })=>{
+  MAX_ROUNDS = maxRounds; TEAM_IDS = teams; MAX_TEAM = maxTeam; REQUIRE_LOCKS = !!requireLocks;
   document.getElementById('maxTeamLab').textContent = String(MAX_TEAM);
+  document.getElementById('requireLocksLab').textContent = `Locks Required: ${REQUIRE_LOCKS?'Yes':'No'}`;
+  document.getElementById('progressNote').textContent = REQUIRE_LOCKS
+    ? '※ 全チームロック後に「次」で公開＆d100解決します。'
+    : '※ ロックは任意。未ロックがいても「次」で公開＆d100解決します。';
+
   players = state.players; draft = state.draft;
   renderAll(); buildLoginCards(); buildTeamPanels(); fetchImages();
   updateStateBar();
@@ -208,11 +214,7 @@ socket.on('state:updated', (state)=>{ players=state.players; draft=state.draft; 
 socket.on('action:err', ({message})=> alert(message));
 socket.on('leader:ok', ({role})=>{ const area=document.getElementById('area'+role); if(area) area.classList.remove('hidden'); });
 socket.on('leader:err', ({message})=> alert(message));
-socket.on('player:updated:ok', ({id})=>{
-  alert('編集を保存しました');
-  document.getElementById('editId').value='';
-  document.getElementById('btnRegister').textContent='登録する / 上書き保存';
-});
+socket.on('player:updated:ok', ()=>{ alert('編集を保存しました'); resetEditFormLabel(); });
 
 // ====== タブ ======
 const tabs = document.querySelectorAll('.tab');
@@ -268,13 +270,13 @@ form.addEventListener('submit', async (e)=>{
   if(editingId){ socket.emit('player:update', { id: editingId, ...payload }); }
   else{ socket.emit('player:add', payload); }
 
-  form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint();
-  if(editingId){ document.getElementById('editId').value=''; document.getElementById('btnRegister').textContent='登録する / 上書き保存'; }
+  form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint(); resetEditFormLabel();
 });
-document.getElementById('resetForm').addEventListener('click', ()=>{
-  form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint();
-  document.getElementById('editId').value=''; document.getElementById('btnRegister').textContent='登録する / 上書き保存';
-});
+function resetEditFormLabel(){
+  document.getElementById('editId').value='';
+  document.getElementById('btnRegister').textContent='登録する / 上書き保存';
+}
+document.getElementById('resetForm').addEventListener('click', ()=>{ form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint(); resetEditFormLabel(); });
 
 // ====== 一覧・並び替え・個別削除・編集起動 ======
 const playerListEl = document.getElementById('playerList');
@@ -342,13 +344,14 @@ const locksBar = document.getElementById('locksBar');
 const cycleLab = document.getElementById('cycleLab');
 const roundLab = document.getElementById('roundLab');
 const maxTeamLab = document.getElementById('maxTeamLab');
+const requireLocksLab = document.getElementById('requireLocksLab');
 const startDraftBtn = document.getElementById('startDraft');
 const nextBtn = document.getElementById('nextStep');
 
 function buildLoginCards(){
   loginGrid.innerHTML = TEAM_IDS.map(t=>`
     <div class="card">
-      <h3>リーダー${t} ログイン ${badge('未ロック','pill lock') /* default */}</h3>
+      <h3>リーダー${t} ログイン ${badge('未ロック','pill lock')}</h3>
       <div class="row">
         <input type="password" id="pass${t}" placeholder="パスワード">
         <button class="btn" data-login="${t}">入室</button>
@@ -387,7 +390,6 @@ function renderLocksBar(){
     const locked = !!draft.locks?.[t];
     return badge(`${t}:${locked?'LOCK':'OPEN'}`, locked ? 'pill ok' : 'pill lock');
   }).join('');
-  // 各カードのバッジ更新
   TEAM_IDS.forEach(t=>{
     const el = document.getElementById('lockBadge'+t);
     if(el){ el.textContent = draft.locks?.[t] ? 'LOCK' : '未ロック'; el.className = draft.locks?.[t] ? 'pill ok' : 'pill lock'; }
@@ -441,8 +443,7 @@ function updateStateBar(){
   roundLab.textContent = (draft?.state?.mode==='sequential') ? (String((draft?.state?.round ?? 0)+1)) : '-';
 }
 function updateNextButton(){
-  const sequential = draft?.state?.mode === 'sequential';
-  nextBtn.disabled = !sequential;
+  nextBtn.disabled = (draft?.state?.mode !== 'sequential');
 }
 
 function appendLog(line){
