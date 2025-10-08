@@ -17,24 +17,27 @@ const server = http.createServer(app);
 const io = new SocketIOServer(server, { cors: { origin: '*' } });
 
 // ====== 環境変数 ======
-const TEAM_IDS = (process.env.TEAMS || 'A,B,C,D,E,F').split(',').map(s=>s.trim()).filter(Boolean);
+const TEAM_IDS = (process.env.TEAMS || 'A,B,C,D,E,F,G,H,I').split(',').map(s=>s.trim()).filter(Boolean);
 const MAX_ROUNDS = Number(process.env.MAX_ROUNDS || 5);
-const ACTION_PASS = process.env.ACTION_PASS || 'ACTION123'; // 登録/編集/個別削除/全削除/エクスポート
+const MAX_TEAM   = Number(process.env.MAX_TEAM   || 5);
+const ACTION_PASS = process.env.ACTION_PASS || 'ACTION123'; // 登録/編集/削除/全削除/エクスポート
 
 // チームごとのドラフト操作パス（LEADER_A_PASS など）
+const defaultPass = ['ABC','DEF','GHI','JKL','MNO','PQR','STU','VWX','YZA'];
 const teamPasses = Object.fromEntries(TEAM_IDS.map((t, i)=>{
   const envKey = `LEADER_${t}_PASS`;
-  const fallback = ['ABC','DEF','GHI','JKL','MNO','PQR'][i] || `PASS${t}`;
+  const fallback = defaultPass[i] || `PASS${t}`;
   return [t, process.env[envKey] || fallback];
 }));
 
 // ====== 状態（メモリ） ======
 const rooms = new Map();
-function emptyDraft(){
+function emptyDraft(teams=TEAM_IDS){
   return {
-    locks: Object.fromEntries(TEAM_IDS.map(t=>[t,false])),
-    picks: Object.fromEntries(TEAM_IDS.map(t=>[t, Array(MAX_ROUNDS).fill('')])),
-    teams: Object.fromEntries(TEAM_IDS.map(t=>[t, []])),
+    locks: Object.fromEntries(teams.map(t=>[t,false])),
+    picks: Object.fromEntries(teams.map(t=>[t, Array(MAX_ROUNDS).fill('')])),
+    teams: Object.fromEntries(teams.map(t=>[t, []])),
+    state: { mode: 'idle', cycle: 1, round: 0 } // mode: idle | sequential
   };
 }
 function getRoom(roomId='default'){
@@ -50,6 +53,11 @@ function getRoom(roomId='default'){
 }
 const uid = ()=> crypto.randomBytes(5).toString('hex');
 const now = ()=> new Date().toISOString();
+
+const pointsByRank = {
+  'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,
+  'エキスパート':15,'マスター1200':15,'マスター1400～1600':20
+};
 
 // ====== 静的配信 & 画像一覧 ======
 app.use('/public', express.static(path.join(__dirname, 'public')));
@@ -69,7 +77,7 @@ app.get('/api/images', async (_, res)=>{
 });
 
 // health
-app.get('/healthz', (_,res)=> res.json({ ok:true, time: now(), teams: TEAM_IDS }));
+app.get('/healthz', (_,res)=> res.json({ ok:true, time: now(), teams: TEAM_IDS, rounds: MAX_ROUNDS, maxTeam: MAX_TEAM }));
 
 // ====== Socket.IO ======
 io.on('connection', (socket)=>{
@@ -79,7 +87,7 @@ io.on('connection', (socket)=>{
   socket.data.roomId = roomId;
 
   const state = getRoom(roomId);
-  socket.emit('state:init', { state, maxRounds: MAX_ROUNDS, teams: TEAM_IDS });
+  socket.emit('state:init', { state, maxRounds: MAX_ROUNDS, teams: TEAM_IDS, maxTeam: MAX_TEAM });
 
   // --- 認証：ドラフト操作権 ---
   socket.on('leader:login', ({ pass })=>{
@@ -97,8 +105,6 @@ io.on('connection', (socket)=>{
       return socket.emit('action:err', { message: '操作パスワードが違います' });
 
     const room = getRoom(roomId);
-    const pointsByRank = { 'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,'エキスパート':15,'マスター1200':15,'マスター1400～1600':20 };
-
     const player = {
       id: uid(),
       name: String(payload.name||'').slice(0,50),
@@ -123,7 +129,6 @@ io.on('connection', (socket)=>{
     const ix = room.players.findIndex(p=>p.id===id);
     if(ix < 0) return;
 
-    const pointsByRank = { 'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,'エキスパート':15,'マスター1200':15,'マスター1400～1600':20 };
     const p = room.players[ix];
     p.name = String(payload.name||'').slice(0,50);
     p.rank = payload.rank;
@@ -195,57 +200,112 @@ io.on('connection', (socket)=>{
 
     d.locks[team] = !!locked;
     room.lastUpdated = Date.now();
-    io.to(roomId).emit('draft:locksUpdated', d.locks);
+    io.to(roomId).emit('draft:locksUpdated', d.locks); // 全員に即反映（可視化）
   });
 
-  // --- ドラフト：同時公開＆解決（多チーム競合対応） ---
-  socket.on('draft:reveal', ()=>{
+  // ====== 逐次進行モード ======
+  const rnd100 = ()=> 1 + Math.floor(Math.random()*100);
+
+  // 開始
+  socket.on('draft:start', ()=>{
     const room = getRoom(roomId); const d = room.draft;
+    d.state = { mode: 'sequential', cycle: 1, round: 0 };
+    // 「開始時点では各チームがラウンド0の指名→ロック」を行う
+    io.to(roomId).emit('draft:state', d.state);
+  });
+
+  // 次へ（ラウンド逐次）
+  socket.on('draft:next', ()=>{
+    const room = getRoom(roomId); const d = room.draft;
+    if(d.state.mode !== 'sequential') return;
+
+    const r = d.state.round; // 0-index
+    // 進行には全チームロック済みを要求（ロック見える化済）
+    const allLocked = TEAM_IDS.every(t => d.locks[t] === true);
+    if(!allLocked){
+      return io.to(socket.id).emit('action:err', { message: '全チームのロックが必要です' });
+    }
+
     const logs = [];
-    const rnd = ()=> 1 + Math.floor(Math.random()*6);
-
-    for(let i=0;i<MAX_ROUNDS;i++){
-      // ラウンドiの選択を集計
-      const byPlayer = new Map(); // playerId -> teams[]
-      for(const t of TEAM_IDS){
-        const pid = d.picks[t][i] || '';
-        if(!pid) continue;
-        if(!byPlayer.has(pid)) byPlayer.set(pid, []);
-        byPlayer.get(pid).push(t);
-      }
-      if(byPlayer.size===0){ logs.push(`R${i+1}: 指名なし`); continue; }
-
+    // ラウンド r の公開＆解決
+    const byPlayer = new Map(); // playerId -> teams[]
+    for(const t of TEAM_IDS){
+      const pid = d.picks[t][r] || '';
+      if(!pid) continue;
+      if(!byPlayer.has(pid)) byPlayer.set(pid, []);
+      byPlayer.get(pid).push(t);
+    }
+    if(byPlayer.size===0){
+      logs.push(`R${r+1} (Cycle ${d.state.cycle}): 指名なし`);
+    }else{
       for(const [pid, teams] of byPlayer.entries()){
-        // 既に確保済みならスキップ
-        if(TEAM_IDS.some(t=> d.teams[t].includes(pid))) continue;
+        // 既に確保済み or 上限到達チームはスキップ考慮
+        const alreadyTaken = TEAM_IDS.some(t=> d.teams[t].includes(pid));
+        if(alreadyTaken) continue;
 
-        if(teams.length===1){
-          const t = teams[0];
+        // 競合解決（d100）。既に満員のチームは候補から除外。
+        const contenders = teams.filter(t => (d.teams[t].length < MAX_TEAM));
+        if(contenders.length===0){
+          logs.push(`R${r+1}: 全候補チームが定員(${MAX_TEAM})でスキップ`);
+          continue;
+        }
+
+        if(contenders.length===1){
+          const t = contenders[0];
           d.teams[t].push(pid);
-          logs.push(`R${i+1}: ${t} が獲得`);
+          logs.push(`R${r+1}: ${t} が獲得`);
         }else{
-          // 競合：全員d6 → 最大値勝ち。最大同値は再抽選で決着
-          let contenders = teams.slice();
-          while(contenders.length>1){
-            const rolls = contenders.map(t=> [t, rnd()]);
+          // d100 ロール → 最大値勝ち。同値は勝者同値間で再抽選
+          let pool = contenders.slice();
+          let roundLog = [];
+          while(pool.length>1){
+            const rolls = pool.map(t => [t, rnd100()]);
             const max = Math.max(...rolls.map(r=>r[1]));
             const top = rolls.filter(r=>r[1]===max).map(r=>r[0]);
-            logs.push(`R${i+1}: 競合(${contenders.join(', ')}) → ${rolls.map(([t,v])=>`${t}:${v}`).join(' / ')}`);
-            contenders = top;
+            roundLog.push(rolls.map(([t,v])=>`${t}:${v}`).join(' / '));
+            pool = top;
           }
-          const winner = contenders[0];
+          const winner = pool[0];
           d.teams[winner].push(pid);
-          logs.push(`　　→ ${winner} が獲得`);
+          logs.push(`R${r+1}: 競合(${contenders.join(', ')}) → ${roundLog.join(' → ')} → ${winner} が獲得`);
         }
       }
     }
 
-    // 次ラウンドのために全ロック解除
+    // ラウンド処理後：全ロック解除（次ラウンドの指名へ）
     for(const t of TEAM_IDS) d.locks[t] = false;
 
-    room.lastUpdated = Date.now();
+    // 次ラウンドへ
+    d.state.round += 1;
+
+    // ラウンドが一巡したら、全チームの定員チェック
+    if(d.state.round >= MAX_ROUNDS){
+      const allFull = TEAM_IDS.every(t => d.teams[t].length >= MAX_TEAM);
+      if(allFull){
+        d.state = { mode: 'idle', cycle: d.state.cycle, round: MAX_ROUNDS };
+        logs.push(`ドラフト完了（全チーム定員 ${MAX_TEAM}）`);
+        io.to(roomId).emit('draft:resolved', { draft: d, logs });
+        io.to(roomId).emit('draft:locksUpdated', d.locks);
+        io.to(roomId).emit('draft:state', d.state);
+        io.to(roomId).emit('state:updated', getRoom(roomId));
+        return;
+      }else{
+        // 未充足チームがある → 次サイクルへ。各チームは再び1〜MAX_ROUNDSを選択。
+        d.state = { mode: 'sequential', cycle: d.state.cycle + 1, round: 0 };
+        // 次サイクル用に picks をクリア（未充足チームのみでもよいが、全体をクリアして再指名を促す）
+        for(const t of TEAM_IDS){
+          d.picks[t] = Array(MAX_ROUNDS).fill('');
+        }
+        logs.push(`Cycle ${d.state.cycle} 開始：未充足チームがあるため再指名へ`);
+      }
+    }
+
+    // ブロードキャスト
     io.to(roomId).emit('draft:resolved', { draft: d, logs });
-    io.to(roomId).emit('state:updated', room);
+    io.to(roomId).emit('draft:picksUpdated', d.picks);
+    io.to(roomId).emit('draft:locksUpdated', d.locks);
+    io.to(roomId).emit('draft:state', d.state);
+    io.to(roomId).emit('state:updated', getRoom(roomId));
   });
 
   // --- ドラフト初期化 ---
@@ -254,6 +314,7 @@ io.on('connection', (socket)=>{
     room.draft = emptyDraft();
     room.lastUpdated = Date.now();
     io.to(roomId).emit('state:updated', room);
+    io.to(roomId).emit('draft:state', room.draft.state);
   });
 
   // --- バックアップ ---
@@ -272,6 +333,7 @@ io.on('connection', (socket)=>{
     room.draft = data.draft;
     room.lastUpdated = Date.now();
     io.to(roomId).emit('state:updated', room);
+    io.to(roomId).emit('draft:state', room.draft.state);
   });
 });
 
