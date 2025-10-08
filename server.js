@@ -21,6 +21,7 @@ const TEAM_IDS = (process.env.TEAMS || 'A,B,C,D,E,F,G,H,I').split(',').map(s=>s.
 const MAX_ROUNDS = Number(process.env.MAX_ROUNDS || 5);
 const MAX_TEAM   = Number(process.env.MAX_TEAM   || 5);
 const ACTION_PASS = process.env.ACTION_PASS || 'ACTION123'; // 登録/編集/削除/全削除/エクスポート
+const REQUIRE_LOCKS = String(process.env.REQUIRE_LOCKS || 'false').toLowerCase() === 'true'; // ← ここで強制ロックをON/OFF
 
 // チームごとのドラフト操作パス（LEADER_A_PASS など）
 const defaultPass = ['ABC','DEF','GHI','JKL','MNO','PQR','STU','VWX','YZA'];
@@ -77,7 +78,7 @@ app.get('/api/images', async (_, res)=>{
 });
 
 // health
-app.get('/healthz', (_,res)=> res.json({ ok:true, time: now(), teams: TEAM_IDS, rounds: MAX_ROUNDS, maxTeam: MAX_TEAM }));
+app.get('/healthz', (_,res)=> res.json({ ok:true, time: now(), teams: TEAM_IDS, rounds: MAX_ROUNDS, maxTeam: MAX_TEAM, requireLocks: REQUIRE_LOCKS }));
 
 // ====== Socket.IO ======
 io.on('connection', (socket)=>{
@@ -87,7 +88,7 @@ io.on('connection', (socket)=>{
   socket.data.roomId = roomId;
 
   const state = getRoom(roomId);
-  socket.emit('state:init', { state, maxRounds: MAX_ROUNDS, teams: TEAM_IDS, maxTeam: MAX_TEAM });
+  socket.emit('state:init', { state, maxRounds: MAX_ROUNDS, teams: TEAM_IDS, maxTeam: MAX_TEAM, requireLocks: REQUIRE_LOCKS });
 
   // --- 認証：ドラフト操作権 ---
   socket.on('leader:login', ({ pass })=>{
@@ -210,7 +211,6 @@ io.on('connection', (socket)=>{
   socket.on('draft:start', ()=>{
     const room = getRoom(roomId); const d = room.draft;
     d.state = { mode: 'sequential', cycle: 1, round: 0 };
-    // 「開始時点では各チームがラウンド0の指名→ロック」を行う
     io.to(roomId).emit('draft:state', d.state);
   });
 
@@ -220,13 +220,17 @@ io.on('connection', (socket)=>{
     if(d.state.mode !== 'sequential') return;
 
     const r = d.state.round; // 0-index
-    // 進行には全チームロック済みを要求（ロック見える化済）
-    const allLocked = TEAM_IDS.every(t => d.locks[t] === true);
-    if(!allLocked){
-      return io.to(socket.id).emit('action:err', { message: '全チームのロックが必要です' });
+
+    // ★ 全チームロックを必須にするかどうかを切替
+    if (REQUIRE_LOCKS) {
+      const allLocked = TEAM_IDS.every(t => d.locks[t] === true);
+      if(!allLocked){
+        return io.to(socket.id).emit('action:err', { message: '全チームのロックが必要です（REQUIRE_LOCKS=true）' });
+      }
     }
 
     const logs = [];
+
     // ラウンド r の公開＆解決
     const byPlayer = new Map(); // playerId -> teams[]
     for(const t of TEAM_IDS){
@@ -239,11 +243,10 @@ io.on('connection', (socket)=>{
       logs.push(`R${r+1} (Cycle ${d.state.cycle}): 指名なし`);
     }else{
       for(const [pid, teams] of byPlayer.entries()){
-        // 既に確保済み or 上限到達チームはスキップ考慮
-        const alreadyTaken = TEAM_IDS.some(t=> d.teams[t].includes(pid));
-        if(alreadyTaken) continue;
+        // 既に確保済みならスキップ
+        if(TEAM_IDS.some(t=> d.teams[t].includes(pid))) continue;
 
-        // 競合解決（d100）。既に満員のチームは候補から除外。
+        // 定員未満のチームだけを候補に
         const contenders = teams.filter(t => (d.teams[t].length < MAX_TEAM));
         if(contenders.length===0){
           logs.push(`R${r+1}: 全候補チームが定員(${MAX_TEAM})でスキップ`);
@@ -255,7 +258,7 @@ io.on('connection', (socket)=>{
           d.teams[t].push(pid);
           logs.push(`R${r+1}: ${t} が獲得`);
         }else{
-          // d100 ロール → 最大値勝ち。同値は勝者同値間で再抽選
+          // d100 ロール → 最大値勝ち。同値は再抽選
           let pool = contenders.slice();
           let roundLog = [];
           while(pool.length>1){
@@ -272,13 +275,13 @@ io.on('connection', (socket)=>{
       }
     }
 
-    // ラウンド処理後：全ロック解除（次ラウンドの指名へ）
+    // ラウンド処理後：全ロック解除（次ラウンド用）
     for(const t of TEAM_IDS) d.locks[t] = false;
 
     // 次ラウンドへ
     d.state.round += 1;
 
-    // ラウンドが一巡したら、全チームの定員チェック
+    // ラウンド完了チェック
     if(d.state.round >= MAX_ROUNDS){
       const allFull = TEAM_IDS.every(t => d.teams[t].length >= MAX_TEAM);
       if(allFull){
@@ -290,12 +293,9 @@ io.on('connection', (socket)=>{
         io.to(roomId).emit('state:updated', getRoom(roomId));
         return;
       }else{
-        // 未充足チームがある → 次サイクルへ。各チームは再び1〜MAX_ROUNDSを選択。
+        // 未充足チームがある → 次サイクル（指名をクリアして再度1〜MAX_ROUNDS）
         d.state = { mode: 'sequential', cycle: d.state.cycle + 1, round: 0 };
-        // 次サイクル用に picks をクリア（未充足チームのみでもよいが、全体をクリアして再指名を促す）
-        for(const t of TEAM_IDS){
-          d.picks[t] = Array(MAX_ROUNDS).fill('');
-        }
+        for(const t of TEAM_IDS){ d.picks[t] = Array(MAX_ROUNDS).fill(''); }
         logs.push(`Cycle ${d.state.cycle} 開始：未充足チームがあるため再指名へ`);
       }
     }
