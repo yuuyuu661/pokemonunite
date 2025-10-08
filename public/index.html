@@ -1,11 +1,355 @@
+// server.js — Node.js 20 / Express + Socket.IO (ESM)
+import express from 'express';
+import http from 'http';
+import { Server as SocketIOServer } from 'socket.io';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import crypto from 'crypto';
+import dotenv from 'dotenv';
+import fs from 'fs/promises';
+
+dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+
+const app = express();
+const server = http.createServer(app);
+const io = new SocketIOServer(server, { cors: { origin: '*' } });
+
+// ====== 環境変数 ======
+const TEAM_IDS = (process.env.TEAMS || 'A,B,C,D,E,F,G,H,I').split(',').map(s=>s.trim()).filter(Boolean);
+const MAX_ROUNDS = Number(process.env.MAX_ROUNDS || 5);
+const MAX_TEAM   = Number(process.env.MAX_TEAM   || 5);
+const ACTION_PASS = process.env.ACTION_PASS || 'ACTION123'; // 登録/編集/削除/全削除/エクスポート
+
+// チームごとのドラフト操作パス（LEADER_A_PASS など）
+const defaultPass = ['ABC','DEF','GHI','JKL','MNO','PQR','STU','VWX','YZA'];
+const teamPasses = Object.fromEntries(TEAM_IDS.map((t, i)=>{
+  const envKey = `LEADER_${t}_PASS`;
+  const fallback = defaultPass[i] || `PASS${t}`;
+  return [t, process.env[envKey] || fallback];
+}));
+
+// ====== 状態（メモリ） ======
+const rooms = new Map();
+function emptyDraft(teams=TEAM_IDS){
+  return {
+    locks: Object.fromEntries(teams.map(t=>[t,false])),
+    picks: Object.fromEntries(teams.map(t=>[t, Array(MAX_ROUNDS).fill('')])),
+    teams: Object.fromEntries(teams.map(t=>[t, []])),
+    state: { mode: 'idle', cycle: 1, round: 0 } // mode: idle | sequential
+  };
+}
+function getRoom(roomId='default'){
+  if(!rooms.has(roomId)){
+    rooms.set(roomId, {
+      players: [], // {id,name,rank,points,avatar,pokes[0..2],comment}
+      draft: emptyDraft(),
+      createdAt: Date.now(),
+      lastUpdated: Date.now(),
+    });
+  }
+  return rooms.get(roomId);
+}
+const uid = ()=> crypto.randomBytes(5).toString('hex');
+const now = ()=> new Date().toISOString();
+
+const pointsByRank = {
+  'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,
+  'エキスパート':15,'マスター1200':15,'マスター1400～1600':20
+};
+
+// ====== 静的配信 & 画像一覧 ======
+app.use('/public', express.static(path.join(__dirname, 'public')));
+app.use('/images', express.static(path.join(__dirname, 'public', 'images')));
+app.get('/', (_, res)=> res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
+app.get('/api/images', async (_, res)=>{
+  try{
+    const dir = path.join(__dirname, 'public', 'images');
+    const files = await fs.readdir(dir);
+    const allow = new Set(['.png','.jpg','.jpeg','.webp','.gif','.bmp','.svg']);
+    const list = files.filter(f=> allow.has(path.extname(f).toLowerCase()));
+    res.json({ files: list });
+  }catch{
+    res.json({ files: [] });
+  }
+});
+
+// health
+app.get('/healthz', (_,res)=> res.json({ ok:true, time: now(), teams: TEAM_IDS, rounds: MAX_ROUNDS, maxTeam: MAX_TEAM }));
+
+// ====== Socket.IO ======
+io.on('connection', (socket)=>{
+  const { room: roomQuery } = socket.handshake.auth || {};
+  const roomId = (roomQuery && String(roomQuery)) || 'default';
+  socket.join(roomId);
+  socket.data.roomId = roomId;
+
+  const state = getRoom(roomId);
+  socket.emit('state:init', { state, maxRounds: MAX_ROUNDS, teams: TEAM_IDS, maxTeam: MAX_TEAM });
+
+  // --- 認証：ドラフト操作権 ---
+  socket.on('leader:login', ({ pass })=>{
+    const hit = TEAM_IDS.find(t => pass === teamPasses[t]);
+    if(hit){ socket.data.role = hit; socket.emit('leader:ok', { role: hit }); }
+    else { socket.emit('leader:err', { message: 'パスワードが違います' }); }
+  });
+
+  // --- 操作パス検証 ---
+  const checkActionPass = (p)=> p && p === ACTION_PASS;
+
+  // --- 選手登録 ---
+  socket.on('player:add', (payload)=>{
+    if(!checkActionPass(payload?.actionPass))
+      return socket.emit('action:err', { message: '操作パスワードが違います' });
+
+    const room = getRoom(roomId);
+    const player = {
+      id: uid(),
+      name: String(payload.name||'').slice(0,50),
+      rank: payload.rank,
+      points: pointsByRank[payload.rank] ?? 0,
+      avatar: payload.avatar || '',
+      pokes: Array.isArray(payload.pokes) ? payload.pokes.slice(0,3) : [],
+      comment: String(payload.comment||'').slice(0,300)
+    };
+    room.players.push(player);
+    room.lastUpdated = Date.now();
+    io.to(roomId).emit('players:updated', room.players);
+  });
+
+  // --- 選手編集 ---
+  socket.on('player:update', (payload)=>{
+    if(!checkActionPass(payload?.actionPass))
+      return socket.emit('action:err', { message: '操作パスワードが違います' });
+
+    const room = getRoom(roomId);
+    const { id } = payload || {};
+    const ix = room.players.findIndex(p=>p.id===id);
+    if(ix < 0) return;
+
+    const p = room.players[ix];
+    p.name = String(payload.name||'').slice(0,50);
+    p.rank = payload.rank;
+    p.points = pointsByRank[p.rank] ?? 0;
+    p.avatar = payload.avatar || '';
+    p.pokes = Array.isArray(payload.pokes) ? payload.pokes.slice(0,3) : [];
+    p.comment = String(payload.comment||'').slice(0,300);
+
+    room.lastUpdated = Date.now();
+    io.to(roomId).emit('players:updated', room.players);
+    io.to(socket.id).emit('player:updated:ok', { id });
+  });
+
+  // --- 個別削除 ---
+  socket.on('player:delOne', ({ id, actionPass })=>{
+    if(!checkActionPass(actionPass))
+      return socket.emit('action:err', { message: '操作パスワードが違います' });
+
+    const room = getRoom(roomId);
+    const existed = room.players.some(p=>p.id===id);
+    room.players = room.players.filter(x=>x.id!==id);
+
+    // draft参照からも除外
+    const d = room.draft;
+    for(const t of TEAM_IDS){
+      d.picks[t] = d.picks[t].map(x=>x===id?'':x);
+      d.teams[t] = d.teams[t].filter(x=>x!==id);
+    }
+
+    room.lastUpdated = Date.now();
+    if(existed) io.to(roomId).emit('state:updated', room);
+  });
+
+  // --- 一括削除 ---
+  socket.on('players:clearAll', ({ actionPass })=>{
+    if(!checkActionPass(actionPass))
+      return socket.emit('action:err', { message: '操作パスワードが違います' });
+
+    const room = getRoom(roomId);
+    room.players = [];
+    room.draft = emptyDraft();
+    room.lastUpdated = Date.now();
+    io.to(roomId).emit('state:updated', room);
+  });
+
+  // --- ドラフト：指名 ---
+  socket.on('draft:pick', ({ team, round, playerId })=>{
+    const room = getRoom(roomId);
+    const d = room.draft;
+    const role = socket.data.role;
+    if(!role) return;
+    if(team !== role) return;                 // 他チーム操作不可
+    if(round<0 || round>=MAX_ROUNDS) return;
+    if(d.locks[team]) return;                 // ロック中は変更不可
+    const exists = room.players.some(p=>p.id===playerId) || playerId==='';
+    if(!exists) return;
+
+    d.picks[team][round] = playerId;
+    room.lastUpdated = Date.now();
+    io.to(roomId).emit('draft:picksUpdated', d.picks);
+  });
+
+  // --- ドラフト：ロック ---
+  socket.on('draft:lock', ({ team, locked })=>{
+    const room = getRoom(roomId); const d = room.draft;
+    const role = socket.data.role;
+    if(!role) return;
+    if(team !== role) return;
+
+    d.locks[team] = !!locked;
+    room.lastUpdated = Date.now();
+    io.to(roomId).emit('draft:locksUpdated', d.locks); // 全員に即反映（可視化）
+  });
+
+  // ====== 逐次進行モード ======
+  const rnd100 = ()=> 1 + Math.floor(Math.random()*100);
+
+  // 開始
+  socket.on('draft:start', ()=>{
+    const room = getRoom(roomId); const d = room.draft;
+    d.state = { mode: 'sequential', cycle: 1, round: 0 };
+    // 「開始時点では各チームがラウンド0の指名→ロック」を行う
+    io.to(roomId).emit('draft:state', d.state);
+  });
+
+  // 次へ（ラウンド逐次）
+  socket.on('draft:next', ()=>{
+    const room = getRoom(roomId); const d = room.draft;
+    if(d.state.mode !== 'sequential') return;
+
+    const r = d.state.round; // 0-index
+    // 進行には全チームロック済みを要求（ロック見える化済）
+    const allLocked = TEAM_IDS.every(t => d.locks[t] === true);
+    if(!allLocked){
+      return io.to(socket.id).emit('action:err', { message: '全チームのロックが必要です' });
+    }
+
+    const logs = [];
+    // ラウンド r の公開＆解決
+    const byPlayer = new Map(); // playerId -> teams[]
+    for(const t of TEAM_IDS){
+      const pid = d.picks[t][r] || '';
+      if(!pid) continue;
+      if(!byPlayer.has(pid)) byPlayer.set(pid, []);
+      byPlayer.get(pid).push(t);
+    }
+    if(byPlayer.size===0){
+      logs.push(`R${r+1} (Cycle ${d.state.cycle}): 指名なし`);
+    }else{
+      for(const [pid, teams] of byPlayer.entries()){
+        // 既に確保済み or 上限到達チームはスキップ考慮
+        const alreadyTaken = TEAM_IDS.some(t=> d.teams[t].includes(pid));
+        if(alreadyTaken) continue;
+
+        // 競合解決（d100）。既に満員のチームは候補から除外。
+        const contenders = teams.filter(t => (d.teams[t].length < MAX_TEAM));
+        if(contenders.length===0){
+          logs.push(`R${r+1}: 全候補チームが定員(${MAX_TEAM})でスキップ`);
+          continue;
+        }
+
+        if(contenders.length===1){
+          const t = contenders[0];
+          d.teams[t].push(pid);
+          logs.push(`R${r+1}: ${t} が獲得`);
+        }else{
+          // d100 ロール → 最大値勝ち。同値は勝者同値間で再抽選
+          let pool = contenders.slice();
+          let roundLog = [];
+          while(pool.length>1){
+            const rolls = pool.map(t => [t, rnd100()]);
+            const max = Math.max(...rolls.map(r=>r[1]));
+            const top = rolls.filter(r=>r[1]===max).map(r=>r[0]);
+            roundLog.push(rolls.map(([t,v])=>`${t}:${v}`).join(' / '));
+            pool = top;
+          }
+          const winner = pool[0];
+          d.teams[winner].push(pid);
+          logs.push(`R${r+1}: 競合(${contenders.join(', ')}) → ${roundLog.join(' → ')} → ${winner} が獲得`);
+        }
+      }
+    }
+
+    // ラウンド処理後：全ロック解除（次ラウンドの指名へ）
+    for(const t of TEAM_IDS) d.locks[t] = false;
+
+    // 次ラウンドへ
+    d.state.round += 1;
+
+    // ラウンドが一巡したら、全チームの定員チェック
+    if(d.state.round >= MAX_ROUNDS){
+      const allFull = TEAM_IDS.every(t => d.teams[t].length >= MAX_TEAM);
+      if(allFull){
+        d.state = { mode: 'idle', cycle: d.state.cycle, round: MAX_ROUNDS };
+        logs.push(`ドラフト完了（全チーム定員 ${MAX_TEAM}）`);
+        io.to(roomId).emit('draft:resolved', { draft: d, logs });
+        io.to(roomId).emit('draft:locksUpdated', d.locks);
+        io.to(roomId).emit('draft:state', d.state);
+        io.to(roomId).emit('state:updated', getRoom(roomId));
+        return;
+      }else{
+        // 未充足チームがある → 次サイクルへ。各チームは再び1〜MAX_ROUNDSを選択。
+        d.state = { mode: 'sequential', cycle: d.state.cycle + 1, round: 0 };
+        // 次サイクル用に picks をクリア（未充足チームのみでもよいが、全体をクリアして再指名を促す）
+        for(const t of TEAM_IDS){
+          d.picks[t] = Array(MAX_ROUNDS).fill('');
+        }
+        logs.push(`Cycle ${d.state.cycle} 開始：未充足チームがあるため再指名へ`);
+      }
+    }
+
+    // ブロードキャスト
+    io.to(roomId).emit('draft:resolved', { draft: d, logs });
+    io.to(roomId).emit('draft:picksUpdated', d.picks);
+    io.to(roomId).emit('draft:locksUpdated', d.locks);
+    io.to(roomId).emit('draft:state', d.state);
+    io.to(roomId).emit('state:updated', getRoom(roomId));
+  });
+
+  // --- ドラフト初期化 ---
+  socket.on('draft:reset', ()=>{
+    const room = getRoom(roomId);
+    room.draft = emptyDraft();
+    room.lastUpdated = Date.now();
+    io.to(roomId).emit('state:updated', room);
+    io.to(roomId).emit('draft:state', room.draft.state);
+  });
+
+  // --- バックアップ ---
+  socket.on('backup:export', ({ actionPass })=>{
+    if(!checkActionPass(actionPass))
+      return socket.emit('action:err', { message: '操作パスワードが違います' });
+
+    const room = getRoom(roomId);
+    io.to(socket.id).emit('backup:data', { ver:1, players: room.players, draft: room.draft });
+  });
+
+  socket.on('backup:import', (data)=>{
+    const room = getRoom(roomId);
+    if(!data || !Array.isArray(data.players) || !data.draft) return;
+    room.players = data.players;
+    room.draft = data.draft;
+    room.lastUpdated = Date.now();
+    io.to(roomId).emit('state:updated', room);
+    io.to(roomId).emit('draft:state', room.draft.state);
+  });
+});
+
+const PORT = process.env.PORT || 8080;
+server.listen(PORT, ()=> console.log(`[server] listening on :${PORT}`));
+3) public/index.html
+html
+コードをコピーする
 <!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ポケユナ 選手登録 & 6チームドラフト（リアルタイム）</title>
+  <title>ポケユナ 選手登録 & 9チームドラフト（逐次進行 / d100）</title>
   <style>
-    :root{--bg:#0f172a;--card:#111827;--sub:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--acc:#22d3ee;--good:#34d399;--bad:#f87171}
+    :root{--bg:#0f172a;--card:#111827;--sub:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--acc:#22d3ee;--good:#34d399;--bad:#f87171;--warn:#f59e0b}
     html,body{margin:0;padding:0;background:linear-gradient(180deg,#0b1220,#0f172a 40%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
     .wrap{max-width:1200px;margin:24px auto;padding:0 16px 80px}
     .tabs{display:flex;gap:8px;flex-wrap:wrap}
@@ -21,12 +365,15 @@
     .btn{display:inline-flex;align-items:center;gap:8px;border-radius:12px;padding:10px 14px;border:1px solid #324256;background:#152238;color:var(--text);cursor:pointer}
     .btn.acc{background:linear-gradient(180deg,#1cc9ff,#22d3ee);color:#03121a;border:none}
     .btn.bad{background:#361e1e;border-color:#7a1f1f}
+    .btn.warn{background:#3a2a12;border-color:#7a5d1f}
     .card{background:linear-gradient(180deg,#0e1627,#0a1220);border:1px solid #293042;border-radius:12px;padding:12px}
     .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
     .avatar{width:72px;height:72px;border-radius:10px;object-fit:cover;border:1px solid #263244;background:#0b1220}
     .pokeThumb{width:68px;height:68px;border-radius:10px;object-fit:contain;border:1px dashed #2a3a56;background:#0b1220}
     .tag{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid #2a3a56;color:#9bd5ff}
     .pill{border-radius:999px;padding:4px 10px;border:1px solid #304057;background:#0d1626;color:#a8d6ff;font-size:12px}
+    .pill.lock{color:#fef3c7;border-color:#7a5d1f;background:#3a2a12}
+    .pill.ok{color:#d1fae5;border-color:#065f46;background:#064e3b}
     .list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
     .hidden{display:none}
     .hr{height:1px;background:#22314a;margin:12px 0;border:0}
@@ -38,11 +385,12 @@
     .teamGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
     @media (max-width:1200px){.teamGrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media (max-width:800px){.teamGrid{grid-template-columns:1fr}}
+    .locksBar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
   </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>🟣 ポケユナ選手登録 & 6チームドラフト（リアルタイム）</h1>
+  <h1>🟣 ポケユナ選手登録 & 9チームドラフト（逐次 / d100）</h1>
   <div class="note">URL末尾に <code>?room=任意</code> でルーム分け。画像は <code>/images/</code> 配下から選択。</div>
 
   <div class="tabs" id="tabs">
@@ -126,16 +474,25 @@
 
   <!-- Draft Panel -->
   <section class="panel hidden" id="panel-draft">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div class="locksBar" id="locksBar"></div>
+      <div class="row">
+        <span class="pill">Cycle: <span id="cycleLab">-</span></span>
+        <span class="pill">Round: <span id="roundLab">-</span></span>
+        <span class="pill">Max Team: <span id="maxTeamLab">-</span></span>
+      </div>
+    </div>
+
     <div class="teamGrid" id="loginGrid"></div>
 
     <div class="hr"></div>
     <div class="row" style="justify-content:space-between;align-items:center">
       <div class="row">
-        <span class="pill">ドラフトラウンド：1〜<span id="maxRoundsLab"></span></span>
-        <button class="btn acc" id="reveal">同時公開 & 解決</button>
+        <button class="btn acc" id="startDraft">ドラフト開始</button>
+        <button class="btn warn" id="nextStep" disabled>次</button>
         <button class="btn" id="resetDraft">ドラフト初期化</button>
       </div>
-      <div class="note">※ 競合は各チームd6で判定、最大値勝ち。最大同値は再抽選。</div>
+      <div class="note">※ ラウンドごとに「全チームロック」後、「次」で公開＆d100解決 → 次ラウンドへ進行</div>
     </div>
 
     <div class="teamGrid" id="teamsGrid"></div>
@@ -168,28 +525,30 @@
 const POINTS_BY_RANK = { 'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,'エキスパート':15,'マスター1200':15,'マスター1400～1600':20 };
 function escapeHTML(s){ return (s||'').replace(/[&<>\"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
 async function fileToDataURL(file){ return await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(file); }); }
+function badge(txt, cls='pill'){ return `<span class="${cls}">${txt}</span>`; }
 
 // ====== 接続 ======
 const roomId = new URL(location.href).searchParams.get('room') || 'default';
 const socket = io('/', { auth: { room: roomId } });
 
-let MAX_ROUNDS = 5; let TEAM_IDS = ['A','B'];
-let players = []; let draft = { locks:{}, picks:{}, teams:{} };
+let MAX_ROUNDS = 5; let MAX_TEAM = 5; let TEAM_IDS = ['A','B'];
+let players = []; let draft = { locks:{}, picks:{}, teams:{}, state:{mode:'idle',cycle:1,round:0} };
 let imageFiles = [];
-let currentSort = null; // 'high'|'low'|null
+let currentSort = null;
 
-socket.on('state:init', ({ state, maxRounds, teams })=>{
-  MAX_ROUNDS = maxRounds; TEAM_IDS = teams;
-  document.getElementById('maxRoundsLab').textContent = String(MAX_ROUNDS);
+socket.on('state:init', ({ state, maxRounds, teams, maxTeam })=>{
+  MAX_ROUNDS = maxRounds; TEAM_IDS = teams; MAX_TEAM = maxTeam;
+  document.getElementById('maxTeamLab').textContent = String(MAX_TEAM);
   players = state.players; draft = state.draft;
   renderAll(); buildLoginCards(); buildTeamPanels(); fetchImages();
+  updateStateBar();
 });
-
 socket.on('players:updated', (list)=>{ players=list; renderPlayers(); refreshPickers(); renderTeams(); });
 socket.on('draft:picksUpdated', (picks)=>{ draft.picks=picks; refreshPickers(); });
-socket.on('draft:locksUpdated', (locks)=>{ draft.locks=locks; refreshPickers(); });
-socket.on('draft:resolved', ({draft: d, logs})=>{ draft=d; logs.forEach(appendLog); refreshPickers(); renderTeams(); });
-socket.on('state:updated', (state)=>{ players=state.players; draft=state.draft; renderAll(); buildLoginCards(); buildTeamPanels(); });
+socket.on('draft:locksUpdated', (locks)=>{ draft.locks=locks; refreshPickers(); renderLocksBar(); });
+socket.on('draft:resolved', ({draft: d, logs})=>{ draft=d; logs.forEach(appendLog); refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); });
+socket.on('draft:state', (st)=>{ draft.state = st; updateStateBar(); updateNextButton(); });
+socket.on('state:updated', (state)=>{ players=state.players; draft=state.draft; renderAll(); buildLoginCards(); buildTeamPanels(); updateStateBar(); renderLocksBar(); });
 socket.on('action:err', ({message})=> alert(message));
 socket.on('leader:ok', ({role})=>{ const area=document.getElementById('area'+role); if(area) area.classList.remove('hidden'); });
 socket.on('leader:err', ({message})=> alert(message));
@@ -210,7 +569,7 @@ for(const t of tabs){
     Object.values(panels).forEach(p=>p.classList.add('hidden'));
     panels[t.dataset.panel].classList.remove('hidden');
     if(t.dataset.panel==='players') renderPlayers();
-    if(t.dataset.panel==='draft'){ refreshPickers(); renderTeams(); }
+    if(t.dataset.panel==='draft'){ refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); updateNextButton(); }
   });
 }
 
@@ -219,11 +578,6 @@ const rankEl = document.getElementById('pRank');
 const pointLabel = document.getElementById('autoPoint');
 function updatePoint(){ pointLabel.textContent = POINTS_BY_RANK[rankEl.value] ?? '-' } updatePoint();
 rankEl.addEventListener('change', updatePoint);
-
-// ====== アバター（オプション） ======
-const avatarInput = document.getElementById('pAvatar');
-const avatarPreview = document.getElementById('avatarPreview');
-avatarInput.addEventListener('change', async (e)=>{ const f=e.target.files?.[0]; avatarPreview.src = f? await fileToDataURL(f): '' });
 
 // ====== 画像一覧（/images）→ 使用ポケモン選択 ======
 const pokeSelects = [...document.querySelectorAll('.pokeSelect')];
@@ -239,6 +593,10 @@ async function fetchImages(){
 
 // ====== 登録/編集 ======
 const form = document.getElementById('playerForm');
+const avatarInput = document.getElementById('pAvatar');
+const avatarPreview = document.getElementById('avatarPreview');
+avatarInput.addEventListener('change', async (e)=>{ const f=e.target.files?.[0]; avatarPreview.src = f? await fileToDataURL(f): '' });
+
 form.addEventListener('submit', async (e)=>{
   e.preventDefault();
   const actionPass = prompt('操作パスワードを入力してください'); if(!actionPass) return;
@@ -251,17 +609,12 @@ form.addEventListener('submit', async (e)=>{
 
   const editingId = document.getElementById('editId').value.trim();
   const payload = { actionPass, name, rank, avatar, pokes: pokes.slice(0,3), comment };
-
-  if(editingId){
-    socket.emit('player:update', { id: editingId, ...payload });
-  }else{
-    socket.emit('player:add', payload);
-  }
+  if(editingId){ socket.emit('player:update', { id: editingId, ...payload }); }
+  else{ socket.emit('player:add', payload); }
 
   form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint();
   if(editingId){ document.getElementById('editId').value=''; document.getElementById('btnRegister').textContent='登録する / 上書き保存'; }
 });
-
 document.getElementById('resetForm').addEventListener('click', ()=>{
   form.reset(); avatarPreview.src=''; pokePreviews.forEach(img=>img.src=''); updatePoint();
   document.getElementById('editId').value=''; document.getElementById('btnRegister').textContent='登録する / 上書き保存';
@@ -289,9 +642,7 @@ playerListEl.addEventListener('click', (e)=>{
 
   }else if(act==='edit'){
     const actionPass = prompt('操作パスワード（編集を開始）'); if(!actionPass) return;
-    // ここでは「開始時にもパスを要求」。保存時は server 側で再チェック。
     const p = players.find(x=>x.id===id); if(!p) return;
-    // 登録タブに移動してフォームに流し込み
     document.querySelector('[data-panel="register"]').click();
     document.getElementById('pName').value = p.name;
     document.getElementById('pRank').value = p.rank; updatePoint();
@@ -300,7 +651,6 @@ playerListEl.addEventListener('click', (e)=>{
     document.getElementById('btnRegister').textContent = '編集を保存';
     avatarPreview.src = p.avatar || '';
     p.pokes?.forEach((src,i)=>{ if(pokePreviews[i]) pokePreviews[i].src = src; });
-    // セレクトの値も反映（ファイル名一致時のみ）
     pokeSelects.forEach((sel,idx)=>{ const src=p.pokes?.[idx]||''; const val = imageFiles.find(f=>(`/images/${f}`)===src) ? src : ''; sel.value = val; });
   }
 });
@@ -328,22 +678,28 @@ function renderPlayers(){
     </div>`).join('');
 }
 
-// ====== ドラフト（6チーム） ======
+// ====== ドラフト（最大9チーム / 逐次） ======
 const loginGrid = document.getElementById('loginGrid');
 const teamsGrid = document.getElementById('teamsGrid');
 const logEl = document.getElementById('log');
+const locksBar = document.getElementById('locksBar');
+const cycleLab = document.getElementById('cycleLab');
+const roundLab = document.getElementById('roundLab');
+const maxTeamLab = document.getElementById('maxTeamLab');
+const startDraftBtn = document.getElementById('startDraft');
+const nextBtn = document.getElementById('nextStep');
 
 function buildLoginCards(){
   loginGrid.innerHTML = TEAM_IDS.map(t=>`
     <div class="card">
-      <h3>リーダー${t} ログイン</h3>
+      <h3>リーダー${t} ログイン ${badge('未ロック','pill lock') /* default */}</h3>
       <div class="row">
         <input type="password" id="pass${t}" placeholder="パスワード">
         <button class="btn" data-login="${t}">入室</button>
       </div>
       <div id="area${t}" class="hidden">
         <div class="row" style="justify-content:space-between;align-items:center;margin-top:8px">
-          <div class="pill">${t}のピック</div>
+          <div class="pill" id="lockBadge${t}">未ロック</div>
           <button class="btn" data-lock="${t}">ロック</button>
         </div>
         <table class="table" style="margin-top:6px">
@@ -368,6 +724,18 @@ function buildTeamPanels(){
       <h3>チーム${t}</h3>
       <div id="team${t}"></div>
     </div>`).join('');
+}
+
+function renderLocksBar(){
+  locksBar.innerHTML = TEAM_IDS.map(t=>{
+    const locked = !!draft.locks?.[t];
+    return badge(`${t}:${locked?'LOCK':'OPEN'}`, locked ? 'pill ok' : 'pill lock');
+  }).join('');
+  // 各カードのバッジ更新
+  TEAM_IDS.forEach(t=>{
+    const el = document.getElementById('lockBadge'+t);
+    if(el){ el.textContent = draft.locks?.[t] ? 'LOCK' : '未ロック'; el.className = draft.locks?.[t] ? 'pill ok' : 'pill lock'; }
+  });
 }
 
 function refreshPickers(){
@@ -408,16 +776,30 @@ function renderTeams(){
         <div class="note">${escapeHTML(p.rank)}</div></div></div>`;
     }).join('');
     const total = ids.reduce((s,id)=> s + (players.find(x=>x.id===id)?.points||0), 0);
-    el.innerHTML = rows + `<div class="hr"></div><div class="right">合計ポイント：<strong>${total}</strong></div>`;
+    el.innerHTML = rows + `<div class="hr"></div><div class="right">合計ポイント：<strong>${total}</strong>（${ids.length}/${MAX_TEAM}）</div>`;
   }
 }
 
-function appendLog(line){ const time=new Date().toLocaleTimeString('ja-JP',{hour12:false}); logEl.innerHTML += `<div>[${time}] ${line}</div>`; logEl.scrollTop = logEl.scrollHeight; }
+function updateStateBar(){
+  cycleLab.textContent = draft?.state?.cycle ?? '-';
+  roundLab.textContent = (draft?.state?.mode==='sequential') ? (String((draft?.state?.round ?? 0)+1)) : '-';
+}
+function updateNextButton(){
+  const sequential = draft?.state?.mode === 'sequential';
+  nextBtn.disabled = !sequential;
+}
+
+function appendLog(line){
+  const time=new Date().toLocaleTimeString('ja-JP',{hour12:false});
+  logEl.innerHTML += `<div>[${time}] ${line}</div>`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
 
 document.getElementById('resetDraft').addEventListener('click',()=> socket.emit('draft:reset'));
-document.getElementById('reveal').addEventListener('click',()=> socket.emit('draft:reveal'));
+startDraftBtn.addEventListener('click', ()=> socket.emit('draft:start'));
+nextBtn.addEventListener('click', ()=> socket.emit('draft:next'));
 
-function renderAll(){ renderPlayers(); buildLoginCards(); refreshPickers(); buildTeamPanels(); renderTeams(); }
+function renderAll(){ renderPlayers(); buildLoginCards(); refreshPickers(); buildTeamPanels(); renderTeams(); renderLocksBar(); updateStateBar(); updateNextButton(); }
 
 // ====== バックアップ ======
 const exportBtn = document.getElementById('exportBtn');
