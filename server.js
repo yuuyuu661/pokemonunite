@@ -23,7 +23,7 @@ const MAX_TEAM   = Number(process.env.MAX_TEAM   || 5);
 const ACTION_PASS = process.env.ACTION_PASS || 'ACTION123';
 const REQUIRE_LOCKS = String(process.env.REQUIRE_LOCKS || 'false').toLowerCase() === 'true';
 
-// チームごとのドラフト操作パス（LEADER_A_PASS など）
+// チームパス
 const defaultPass = ['ABC','DEF','GHI','JKL','MNO','PQR','STU','VWX','YZA'];
 const teamPasses = Object.fromEntries(TEAM_IDS.map((t, i)=>{
   const envKey = `LEADER_${t}_PASS`;
@@ -44,7 +44,7 @@ function emptyDraft(teams=TEAM_IDS){
 function getRoom(roomId='default'){
   if(!rooms.has(roomId)){
     rooms.set(roomId, {
-      players: [], // {id,name,rank,points,avatar,pokes[0..2],comment}
+      players: [],
       draft: emptyDraft(),
       createdAt: Date.now(),
       lastUpdated: Date.now(),
@@ -64,7 +64,6 @@ const pointsByRank = {
 app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use('/images', express.static(path.join(__dirname, 'public', 'images')));
 app.get('/', (_, res)=> res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
 app.get('/api/images', async (_, res)=>{
   try{
     const dir = path.join(__dirname, 'public', 'images');
@@ -72,12 +71,8 @@ app.get('/api/images', async (_, res)=>{
     const allow = new Set(['.png','.jpg','.jpeg','.webp','.gif','.bmp','.svg']);
     const list = files.filter(f=> allow.has(path.extname(f).toLowerCase()));
     res.json({ files: list });
-  }catch{
-    res.json({ files: [] });
-  }
+  }catch{ res.json({ files: [] }); }
 });
-
-// health
 app.get('/healthz', (_,res)=> res.json({
   ok:true, time: now(), teams: TEAM_IDS, rounds: MAX_ROUNDS, maxTeam: MAX_TEAM, requireLocks: REQUIRE_LOCKS
 }));
@@ -92,21 +87,19 @@ io.on('connection', (socket)=>{
   const state = getRoom(roomId);
   socket.emit('state:init', { state, maxRounds: MAX_ROUNDS, teams: TEAM_IDS, maxTeam: MAX_TEAM, requireLocks: REQUIRE_LOCKS });
 
-  // --- 認証：ドラフト操作権 ---
+  // 認証
   socket.on('leader:login', ({ pass })=>{
     const hit = TEAM_IDS.find(t => pass === teamPasses[t]);
     if(hit){ socket.data.role = hit; socket.emit('leader:ok', { role: hit }); }
     else { socket.emit('leader:err', { message: 'パスワードが違います' }); }
   });
 
-  // --- 操作パス検証 ---
+  // 操作パス検証
   const checkActionPass = (p)=> p && p === ACTION_PASS;
 
-  // --- 選手登録 ---
+  // 選手登録/編集/削除
   socket.on('player:add', (payload)=>{
-    if(!checkActionPass(payload?.actionPass))
-      return socket.emit('action:err', { message: '操作パスワードが違います' });
-
+    if(!checkActionPass(payload?.actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
     const player = {
       id: uid(),
@@ -121,17 +114,11 @@ io.on('connection', (socket)=>{
     room.lastUpdated = Date.now();
     io.to(roomId).emit('players:updated', room.players);
   });
-
-  // --- 選手編集 ---
   socket.on('player:update', (payload)=>{
-    if(!checkActionPass(payload?.actionPass))
-      return socket.emit('action:err', { message: '操作パスワードが違います' });
-
+    if(!checkActionPass(payload?.actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
-    const { id } = payload || {};
-    const ix = room.players.findIndex(p=>p.id===id);
+    const ix = room.players.findIndex(p=>p.id===payload.id);
     if(ix < 0) return;
-
     const p = room.players[ix];
     p.name = String(payload.name||'').slice(0,50);
     p.rank = payload.rank;
@@ -139,37 +126,24 @@ io.on('connection', (socket)=>{
     p.avatar = payload.avatar || '';
     p.pokes = Array.isArray(payload.pokes) ? payload.pokes.slice(0,3) : [];
     p.comment = String(payload.comment||'').slice(0,300);
-
     room.lastUpdated = Date.now();
     io.to(roomId).emit('players:updated', room.players);
-    io.to(socket.id).emit('player:updated:ok', { id });
+    io.to(socket.id).emit('player:updated:ok', { id: payload.id });
   });
-
-  // --- 個別削除 ---
   socket.on('player:delOne', ({ id, actionPass })=>{
-    if(!checkActionPass(actionPass))
-      return socket.emit('action:err', { message: '操作パスワードが違います' });
-
+    if(!checkActionPass(actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
-    const existed = room.players.some(p=>p.id===id);
-    room.players = room.players.filter(x=>x.id!==id);
-
-    // draft参照からも除外
     const d = room.draft;
+    room.players = room.players.filter(x=>x.id!==id);
     for(const t of TEAM_IDS){
       d.picks[t] = d.picks[t].map(x=>x===id?'':x);
       d.teams[t] = d.teams[t].filter(x=>x!==id);
     }
-
     room.lastUpdated = Date.now();
-    if(existed) io.to(roomId).emit('state:updated', room);
+    io.to(roomId).emit('state:updated', room);
   });
-
-  // --- 一括削除 ---
   socket.on('players:clearAll', ({ actionPass })=>{
-    if(!checkActionPass(actionPass))
-      return socket.emit('action:err', { message: '操作パスワードが違います' });
-
+    if(!checkActionPass(actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
     room.players = [];
     room.draft = emptyDraft();
@@ -177,70 +151,52 @@ io.on('connection', (socket)=>{
     io.to(roomId).emit('state:updated', room);
   });
 
-  // --- ドラフト：指名 ---
+  // ドラフト：指名/ロック
   socket.on('draft:pick', ({ team, round, playerId })=>{
-    const room = getRoom(roomId);
-    const d = room.draft;
-    const role = socket.data.role;
-    if(!role) return;
-    if(team !== role) return;                 // 他チーム操作不可
+    const room = getRoom(roomId); const d = room.draft; const role = socket.data.role;
+    if(!role || team !== role) return;
     if(round<0 || round>=MAX_ROUNDS) return;
-    if(d.locks[team]) return;                 // ロック中は変更不可
+    if(d.locks[team]) return; // ロック中は変更不可
     const exists = room.players.some(p=>p.id===playerId) || playerId==='';
     if(!exists) return;
-
     d.picks[team][round] = playerId;
     room.lastUpdated = Date.now();
     io.to(roomId).emit('draft:picksUpdated', d.picks);
   });
-
-  // --- ドラフト：ロック ---
   socket.on('draft:lock', ({ team, locked })=>{
-    const room = getRoom(roomId); const d = room.draft;
-    const role = socket.data.role;
-    if(!role) return;
-    if(team !== role) return;
-
+    const room = getRoom(roomId); const d = room.draft; const role = socket.data.role;
+    if(!role || team !== role) return;
     d.locks[team] = !!locked;
     room.lastUpdated = Date.now();
-    io.to(roomId).emit('draft:locksUpdated', d.locks); // 全員に即反映（可視化）
+    io.to(roomId).emit('draft:locksUpdated', d.locks);
   });
 
-  // ====== 逐次進行モード（開示→進行の二段階） ======
+  // ========= 開示 → 一斉進行 =========
   const rnd100 = ()=> 1 + Math.floor(Math.random()*100);
 
-  // 「選抜メンバー開示」：ロック済みチームの現在ラウンド指名のみ公開
+  // 開示：ロック済みチームの現在ラウンドを全員に見せる
   socket.on('draft:revealLocked', ()=>{
     const room = getRoom(roomId); const d = room.draft;
     if(d.state.mode === 'idle'){ d.state = { mode:'sequential', cycle: d.state.cycle || 1, round: d.state.round || 0 }; }
-
     const r = d.state.round;
     const entries = [];
     for(const t of TEAM_IDS){
-      if(!d.locks[t]) continue; // ロックしているチームのみ
+      if(!d.locks[t]) continue;
       const pid = d.picks[t][r] || '';
       if(!pid) continue;
-      entries.push({ team: t, playerId: pid });
+      const p = room.players.find(x=>x.id===pid);
+      entries.push({ team:t, playerId:pid, name:p?.name||'(未登録)', points:p?.points??0 });
     }
-
-    // プレイヤー名を付与して返す
-    const withNames = entries.map(e=>{
-      const p = room.players.find(x=>x.id===e.playerId);
-      return { ...e, name: p?.name || '(未登録)', points: p?.points ?? 0 };
-    });
-
-    io.to(roomId).emit('draft:preview', { round: r+1, cycle: d.state.cycle, entries: withNames });
+    io.to(roomId).emit('draft:preview', { round: r+1, cycle: d.state.cycle, entries });
   });
 
-  // 「ドラフト進行」：現在ラウンドを一斉解決（ロック済みチームのみ対象）
+  // 進行：ロック済み分のみ一斉解決（※ここではロックを解除しない）
   socket.on('draft:progress', ()=>{
     const room = getRoom(roomId); const d = room.draft;
     if(d.state.mode !== 'sequential') d.state = { mode:'sequential', cycle: 1, round: 0 };
-
-    const r = d.state.round; // 0-index
+    const r = d.state.round;
     const logs = [];
 
-    // ★ REQUIRE_LOCKS=true のときは全ロックを要求（既存オプションを保持）
     if(REQUIRE_LOCKS){
       const allLocked = TEAM_IDS.every(t => d.locks[t] === true);
       if(!allLocked){
@@ -248,10 +204,9 @@ io.on('connection', (socket)=>{
       }
     }
 
-    // ロック済みチームのみを対象に公開＆解決
-    const byPlayer = new Map(); // playerId -> teams[]
+    const byPlayer = new Map();
     for(const t of TEAM_IDS){
-      if(!d.locks[t]) continue;            // ロックしていないチームは今回は未参加
+      if(!d.locks[t]) continue; // ロック済みのみ対象
       const pid = d.picks[t][r] || '';
       if(!pid) continue;
       if(!byPlayer.has(pid)) byPlayer.set(pid, []);
@@ -262,20 +217,17 @@ io.on('connection', (socket)=>{
       logs.push(`R${r+1} (Cycle ${d.state.cycle}): 対象なし（ロック済みなし or 指名なし）`);
     }else{
       for(const [pid, teams] of byPlayer.entries()){
-        if(TEAM_IDS.some(t=> d.teams[t].includes(pid))) continue; // 既に確保済み
-
+        if(TEAM_IDS.some(t=> d.teams[t].includes(pid))) continue;
         const contenders = teams.filter(t => (d.teams[t].length < MAX_TEAM));
         if(contenders.length===0){
           logs.push(`R${r+1}: 全候補チームが定員(${MAX_TEAM})でスキップ`);
           continue;
         }
-
         if(contenders.length===1){
           const t = contenders[0];
           d.teams[t].push(pid);
           logs.push(`R${r+1}: ${t} が獲得`);
         }else{
-          // d100 ロール → 最大値勝ち。同値は該当間で再抽選
           let pool = contenders.slice();
           let roundLog = [];
           while(pool.length>1){
@@ -292,15 +244,16 @@ io.on('connection', (socket)=>{
       }
     }
 
-    // ラウンド処理後：全ロック解除（次ラウンド用）
-    for(const t of TEAM_IDS) d.locks[t] = false;
-
+    // ★ ここではロックを解除しない（維持）
     // 次ラウンドへ
     d.state.round += 1;
 
-    // ラウンド完了チェック
+    // ラウンド完了（= 5番目まで処理）したら、ここで初めてロック解除
     if(d.state.round >= MAX_ROUNDS){
       const allFull = TEAM_IDS.every(t => d.teams[t].length >= MAX_TEAM);
+      // 一旦全ロック解除（次サイクルのため）
+      for(const t of TEAM_IDS) d.locks[t] = false;
+
       if(allFull){
         d.state = { mode: 'idle', cycle: d.state.cycle, round: MAX_ROUNDS };
         logs.push(`ドラフト完了（全チーム定員 ${MAX_TEAM}）`);
@@ -310,7 +263,7 @@ io.on('connection', (socket)=>{
         io.to(roomId).emit('state:updated', getRoom(roomId));
         return;
       }else{
-        // 未充足チームがある → 次サイクル（指名をクリアして再度1〜MAX_ROUNDS）
+        // 未充足チームがある → 次サイクルへ（指名欄クリア・ロックは解除済み）
         d.state = { mode: 'sequential', cycle: d.state.cycle + 1, round: 0 };
         for(const t of TEAM_IDS){ d.picks[t] = Array(MAX_ROUNDS).fill(''); }
         logs.push(`Cycle ${d.state.cycle} 開始：未充足チームがあるため再指名へ`);
@@ -325,7 +278,7 @@ io.on('connection', (socket)=>{
     io.to(roomId).emit('state:updated', getRoom(roomId));
   });
 
-  // --- ドラフト初期化 ---
+  // 初期化
   socket.on('draft:reset', ()=>{
     const room = getRoom(roomId);
     room.draft = emptyDraft();
@@ -334,15 +287,12 @@ io.on('connection', (socket)=>{
     io.to(roomId).emit('draft:state', room.draft.state);
   });
 
-  // --- バックアップ ---
+  // バックアップ
   socket.on('backup:export', ({ actionPass })=>{
-    if(!checkActionPass(actionPass))
-      return socket.emit('action:err', { message: '操作パスワードが違います' });
-
+    if(!checkActionPass(actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
     io.to(socket.id).emit('backup:data', { ver:1, players: room.players, draft: room.draft });
   });
-
   socket.on('backup:import', (data)=>{
     const room = getRoom(roomId);
     if(!data || !Array.isArray(data.players) || !data.draft) return;
