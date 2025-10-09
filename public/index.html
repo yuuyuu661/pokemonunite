@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ポケユナ 選手登録 & 9チームドラフト（逐次 / d100）</title>
+  <title>ポケユナ 選手登録 & 9チームドラフト（開示→一斉進行 / d100）</title>
   <style>
     :root{--bg:#0f172a;--card:#111827;--sub:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--acc:#22d3ee;--good:#34d399;--bad:#f87171;--warn:#f59e0b}
     html,body{margin:0;padding:0;background:linear-gradient(180deg,#0b1220,#0f172a 40%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
@@ -42,11 +42,12 @@
     @media (max-width:1200px){.teamGrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media (max-width:800px){.teamGrid{grid-template-columns:1fr}}
     .locksBar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+    .preview{padding:10px;border:1px dashed #425a8a;border-radius:10px;background:#0c1425}
   </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>🟣 ポケユナ選手登録 & 9チームドラフト（逐次 / d100）</h1>
+  <h1>🟣 ポケユナ選手登録 & 9チームドラフト（開示→一斉進行 / d100）</h1>
   <div class="note">URL末尾に <code>?room=任意</code> でルーム分け。画像は <code>/images/</code> 配下から選択。</div>
 
   <div class="tabs" id="tabs">
@@ -145,12 +146,14 @@
     <div class="hr"></div>
     <div class="row" style="justify-content:space-between;align-items:center">
       <div class="row">
-        <button class="btn acc" id="startDraft">ドラフト開始</button>
-        <button class="btn warn" id="nextStep" disabled>次</button>
+        <button class="btn acc" id="revealLocked">選抜メンバー開示</button>
+        <button class="btn warn" id="progressAll" disabled>ドラフト進行</button>
         <button class="btn" id="resetDraft">ドラフト初期化</button>
       </div>
-      <div class="note" id="progressNote">※ ロックは任意。未ロックがいても「次」で公開＆d100解決します。</div>
+      <div class="note" id="progressNote">※ ロック済みチームの現在ラウンド指名を公開 → 「ドラフト進行」で一斉解決（d100）</div>
     </div>
+
+    <div class="preview hidden" id="previewBox"></div>
 
     <div class="teamGrid" id="teamsGrid"></div>
 
@@ -197,20 +200,28 @@ socket.on('state:init', ({ state, maxRounds, teams, maxTeam, requireLocks })=>{
   MAX_ROUNDS = maxRounds; TEAM_IDS = teams; MAX_TEAM = maxTeam; REQUIRE_LOCKS = !!requireLocks;
   document.getElementById('maxTeamLab').textContent = String(MAX_TEAM);
   document.getElementById('requireLocksLab').textContent = `Locks Required: ${REQUIRE_LOCKS?'Yes':'No'}`;
-  document.getElementById('progressNote').textContent = REQUIRE_LOCKS
-    ? '※ 全チームロック後に「次」で公開＆d100解決します。'
-    : '※ ロックは任意。未ロックがいても「次」で公開＆d100解決します。';
-
   players = state.players; draft = state.draft;
   renderAll(); buildLoginCards(); buildTeamPanels(); fetchImages();
-  updateStateBar();
+  updateStateBar(); updateButtons();
 });
 socket.on('players:updated', (list)=>{ players=list; renderPlayers(); refreshPickers(); renderTeams(); });
 socket.on('draft:picksUpdated', (picks)=>{ draft.picks=picks; refreshPickers(); });
-socket.on('draft:locksUpdated', (locks)=>{ draft.locks=locks; refreshPickers(); renderLocksBar(); });
-socket.on('draft:resolved', ({draft: d, logs})=>{ draft=d; logs.forEach(appendLog); refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); });
-socket.on('draft:state', (st)=>{ draft.state = st; updateStateBar(); updateNextButton(); });
-socket.on('state:updated', (state)=>{ players=state.players; draft=state.draft; renderAll(); buildLoginCards(); buildTeamPanels(); updateStateBar(); renderLocksBar(); });
+socket.on('draft:locksUpdated', (locks)=>{ draft.locks=locks; refreshPickers(); renderLocksBar(); updateButtons(); });
+socket.on('draft:resolved', ({draft: d, logs})=>{ draft=d; logs.forEach(appendLog); refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); hidePreview(); updateButtons(); });
+socket.on('draft:state', (st)=>{ draft.state = st; updateStateBar(); updateButtons(); });
+socket.on('draft:preview', ({ round, cycle, entries })=>{
+  // プレビューを表示
+  const box = document.getElementById('previewBox');
+  if(!entries.length){
+    box.innerHTML = `<strong>R${round} / Cycle ${cycle}</strong><div class="note">ロック済みの指名はありません。</div>`;
+  }else{
+    const rows = entries.map(e=>`<div class="row"><span class="pill">${e.team}</span> <span>${escapeHTML(e.name)}</span> <span class="tag">${e.points}pt</span></div>`).join('');
+    box.innerHTML = `<strong>R${round} / Cycle ${cycle} — ロック済みの選抜メンバー</strong><div style="margin-top:6px">${rows}</div>`;
+  }
+  box.classList.remove('hidden');
+  document.getElementById('progressAll').disabled = false; // 開示後に進行可能
+});
+
 socket.on('action:err', ({message})=> alert(message));
 socket.on('leader:ok', ({role})=>{ const area=document.getElementById('area'+role); if(area) area.classList.remove('hidden'); });
 socket.on('leader:err', ({message})=> alert(message));
@@ -227,7 +238,7 @@ for(const t of tabs){
     Object.values(panels).forEach(p=>p.classList.add('hidden'));
     panels[t.dataset.panel].classList.remove('hidden');
     if(t.dataset.panel==='players') renderPlayers();
-    if(t.dataset.panel==='draft'){ refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); updateNextButton(); }
+    if(t.dataset.panel==='draft'){ refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); updateButtons(); }
   });
 }
 
@@ -336,7 +347,7 @@ function renderPlayers(){
     </div>`).join('');
 }
 
-// ====== ドラフト（最大9チーム / 逐次） ======
+// ====== ドラフト（開示→一斉進行） ======
 const loginGrid = document.getElementById('loginGrid');
 const teamsGrid = document.getElementById('teamsGrid');
 const logEl = document.getElementById('log');
@@ -345,20 +356,21 @@ const cycleLab = document.getElementById('cycleLab');
 const roundLab = document.getElementById('roundLab');
 const maxTeamLab = document.getElementById('maxTeamLab');
 const requireLocksLab = document.getElementById('requireLocksLab');
-const startDraftBtn = document.getElementById('startDraft');
-const nextBtn = document.getElementById('nextStep');
+const revealBtn = document.getElementById('revealLocked');
+const progressBtn = document.getElementById('progressAll');
+const previewBox = document.getElementById('previewBox');
 
 function buildLoginCards(){
   loginGrid.innerHTML = TEAM_IDS.map(t=>`
     <div class="card">
-      <h3>リーダー${t} ログイン ${badge('未ロック','pill lock')}</h3>
+      <h3>リーダー${t} ログイン <span class="pill lock" id="lockBadge${t}">未ロック</span></h3>
       <div class="row">
         <input type="password" id="pass${t}" placeholder="パスワード">
         <button class="btn" data-login="${t}">入室</button>
       </div>
       <div id="area${t}" class="hidden">
         <div class="row" style="justify-content:space-between;align-items:center;margin-top:8px">
-          <div class="pill" id="lockBadge${t}">未ロック</div>
+          <div class="pill lock" id="lockBadgeInner${t}">未ロック</div>
           <button class="btn" data-lock="${t}">ロック</button>
         </div>
         <table class="table" style="margin-top:6px">
@@ -391,8 +403,11 @@ function renderLocksBar(){
     return badge(`${t}:${locked?'LOCK':'OPEN'}`, locked ? 'pill ok' : 'pill lock');
   }).join('');
   TEAM_IDS.forEach(t=>{
-    const el = document.getElementById('lockBadge'+t);
-    if(el){ el.textContent = draft.locks?.[t] ? 'LOCK' : '未ロック'; el.className = draft.locks?.[t] ? 'pill ok' : 'pill lock'; }
+    const outer = document.getElementById('lockBadge'+t);
+    const inner = document.getElementById('lockBadgeInner'+t);
+    const locked = !!draft.locks?.[t];
+    if(outer){ outer.textContent = locked ? 'LOCK' : '未ロック'; outer.className = locked ? 'pill ok' : 'pill lock'; }
+    if(inner){ inner.textContent = locked ? 'LOCK' : '未ロック'; inner.className = locked ? 'pill ok' : 'pill lock'; }
   });
 }
 
@@ -442,9 +457,11 @@ function updateStateBar(){
   cycleLab.textContent = draft?.state?.cycle ?? '-';
   roundLab.textContent = (draft?.state?.mode==='sequential') ? (String((draft?.state?.round ?? 0)+1)) : '-';
 }
-function updateNextButton(){
-  nextBtn.disabled = (draft?.state?.mode !== 'sequential');
+function updateButtons(){
+  const inSeq = draft?.state?.mode === 'sequential';
+  progressBtn.disabled = !inSeq; // 開示後にサーバから有効化もされる
 }
+function hidePreview(){ previewBox.classList.add('hidden'); previewBox.innerHTML=''; }
 
 function appendLog(line){
   const time=new Date().toLocaleTimeString('ja-JP',{hour12:false});
@@ -452,11 +469,11 @@ function appendLog(line){
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-document.getElementById('resetDraft').addEventListener('click',()=> socket.emit('draft:reset'));
-startDraftBtn.addEventListener('click', ()=> socket.emit('draft:start'));
-nextBtn.addEventListener('click', ()=> socket.emit('draft:next'));
+document.getElementById('resetDraft').addEventListener('click',()=>{ hidePreview(); socket.emit('draft:reset'); });
+revealBtn.addEventListener('click', ()=>{ hidePreview(); socket.emit('draft:revealLocked'); });
+progressBtn.addEventListener('click', ()=> socket.emit('draft:progress'));
 
-function renderAll(){ renderPlayers(); buildLoginCards(); refreshPickers(); buildTeamPanels(); renderTeams(); renderLocksBar(); updateStateBar(); updateNextButton(); }
+function renderAll(){ renderPlayers(); buildLoginCards(); refreshPickers(); buildTeamPanels(); renderTeams(); renderLocksBar(); updateStateBar(); updateButtons(); }
 
 // ====== バックアップ ======
 const exportBtn = document.getElementById('exportBtn');
