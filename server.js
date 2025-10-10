@@ -24,7 +24,7 @@ const ACTION_PASS = process.env.ACTION_PASS || 'ACTION123';
 const REQUIRE_LOCKS = String(process.env.REQUIRE_LOCKS || 'false').toLowerCase() === 'true';
 
 // チームパス
-const defaultPass = ['111','222','333','444','555','666','777','888','999''1010','1111','1212',];
+const defaultPass = ['111','222','333','444','555','666','777','888','999','1010','1111','1212',];
 const teamPasses = Object.fromEntries(TEAM_IDS.map((t, i)=>{
   const envKey = `LEADER_${t}_PASS`;
   const fallback = defaultPass[i] || `PASS${t}`;
@@ -306,4 +306,5 @@ io.on('connection', (socket)=>{
 
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, ()=> console.log(`[server] listening on :${PORT}`));
+
 
