@@ -205,6 +205,11 @@ socket.on('state:init', ({ state, maxRounds, teams, maxTeam, requireLocks })=>{
   updateStateBar(); updateButtons();
 });
 socket.on('players:updated', (list)=>{ players=list; renderPlayers(); refreshPickers(); renderTeams(); });
+socket.on('state:updated', (state)=>{
+  players = state.players;
+  draft = state.draft;
+  renderAll();
+});
 socket.on('draft:picksUpdated', (picks)=>{ draft.picks=picks; refreshPickers(); });
 socket.on('draft:locksUpdated', (locks)=>{ draft.locks=locks; refreshPickers(); renderLocksBar(); updateButtons(); });
 socket.on('draft:resolved', ({draft: d, logs})=>{ draft=d; logs.forEach(appendLog); refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); hidePreview(); updateButtons(); });
@@ -494,3 +499,4 @@ socket.on('backup:data', (data)=>{
 </script>
 </body>
 </html>
+
