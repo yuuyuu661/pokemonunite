@@ -258,7 +258,7 @@ io.on('connection', async (socket) => { // ★ async を付ける
   });
 
   // 進行：ロック済み分のみ一斉解決（※ここではロックを解除しない）
-  socket.on('draft:progress', ()=>{
+  socket.on('draft:progress', async ()=>{
     const room = getRoom(roomId); const d = room.draft;
     if(d.state.mode !== 'sequential') d.state = { mode:'sequential', cycle: 1, round: 0 };
     const r = d.state.round;
@@ -397,6 +397,7 @@ if (dbDraft) {
 const PORT = process.env.PORT || 8080;
 await initDB();
 server.listen(PORT, ()=> console.log(`[server] listening on :${PORT}`));
+
 
 
 
