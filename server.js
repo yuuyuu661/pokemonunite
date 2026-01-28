@@ -88,14 +88,41 @@ app.get('/healthz', (_,res)=> res.json({
 }));
 
 // ====== Socket.IO ======
-io.on('connection', (socket)=>{
+io.on('connection', async (socket) => { // ★ async を付ける
   const { room: roomQuery } = socket.handshake.auth || {};
   const roomId = (roomQuery && String(roomQuery)) || 'default';
   socket.join(roomId);
   socket.data.roomId = roomId;
 
   const state = getRoom(roomId);
-  socket.emit('state:init', { state, maxRounds: MAX_ROUNDS, teams: TEAM_IDS, maxTeam: MAX_TEAM, requireLocks: REQUIRE_LOCKS });
+
+  // ★ DBから復元（初回接続時）
+  try {
+    const dbPlayers = await loadPlayers(roomId);
+    const dbDraftRow = await loadDraft(roomId);
+
+    if (dbPlayers?.length) state.players = dbPlayers;
+
+    if (dbDraftRow) {
+      state.draft = {
+        locks: dbDraftRow.locks || Object.fromEntries(TEAM_IDS.map(t=>[t,false])),
+        picks: dbDraftRow.picks || Object.fromEntries(TEAM_IDS.map(t=>[t, Array(MAX_ROUNDS).fill('')])),
+        teams: dbDraftRow.teams || Object.fromEntries(TEAM_IDS.map(t=>[t, []])),
+        state: dbDraftRow.state || { mode:'idle', cycle: 1, round: 0 },
+      };
+    }
+  } catch (e) {
+    console.error('[DB restore error]', e);
+    // DB不調でもメモリで動くように継続
+  }
+
+  socket.emit('state:init', {
+    state,
+    maxRounds: MAX_ROUNDS,
+    teams: TEAM_IDS,
+    maxTeam: MAX_TEAM,
+    requireLocks: REQUIRE_LOCKS
+  });
 
   // 認証
   socket.on('leader:login', ({ pass })=>{
@@ -108,7 +135,7 @@ io.on('connection', (socket)=>{
   const checkActionPass = (p)=> p && p === ACTION_PASS;
 
   // 選手登録/編集/削除
-  socket.on('player:add', (payload)=>{
+  socket.on('player:add', async (payload)=>{  // ★ async
     if(!checkActionPass(payload?.actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
     const player = {
@@ -122,14 +149,17 @@ io.on('connection', (socket)=>{
     };
     room.players.push(player);
     room.lastUpdated = Date.now();
+    try { await savePlayer(roomId, player); } catch(e){ console.error('[DB savePlayer add]', e); }
+
     io.to(roomId).emit('players:updated', room.players);
   });
-  socket.on('player:update', (payload)=>{
+  socket.on('player:update', async (payload)=>{ // ★ async
     if(!checkActionPass(payload?.actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
     const ix = room.players.findIndex(p=>p.id===payload.id);
     if(ix < 0) return;
-    const p = room.players[ix];
+
+  const p = room.players[ix];
     p.name = String(payload.name||'').slice(0,50);
     p.rank = payload.rank;
     p.points = pointsByRank[p.rank] ?? 0;
@@ -137,47 +167,74 @@ io.on('connection', (socket)=>{
     p.pokes = Array.isArray(payload.pokes) ? payload.pokes.slice(0,3) : [];
     p.comment = String(payload.comment||'').slice(0,300);
     room.lastUpdated = Date.now();
-    io.to(roomId).emit('players:updated', room.players);
-    io.to(socket.id).emit('player:updated:ok', { id: payload.id });
-  });
-  socket.on('player:delOne', ({ id, actionPass })=>{
+
+      // ★ DB保存（ここ！）
+      try { await savePlayer(roomId, p); } catch(e){ console.error('[DB savePlayer update]', e); }
+
+      io.to(roomId).emit('players:updated', room.players);
+      io.to(socket.id).emit('player:updated:ok', { id: payload.id });
+    });
+  socket.on('player:delOne', async ({ id, actionPass })=>{ // ★ async
     if(!checkActionPass(actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
     const d = room.draft;
+
     room.players = room.players.filter(x=>x.id!==id);
     for(const t of TEAM_IDS){
       d.picks[t] = d.picks[t].map(x=>x===id?'':x);
       d.teams[t] = d.teams[t].filter(x=>x!==id);
     }
+
     room.lastUpdated = Date.now();
+
+    // ★ DB反映：選手削除 + ドラフト保存（ここ！）
+    try { await deletePlayer(roomId, id); } catch(e){ console.error('[DB deletePlayer]', e); }
+    try { await saveDraft(roomId, d); } catch(e){ console.error('[DB saveDraft after del]', e); }
+
     io.to(roomId).emit('state:updated', room);
   });
-  socket.on('players:clearAll', ({ actionPass })=>{
+  socket.on('players:clearAll', async ({ actionPass })=>{
     if(!checkActionPass(actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
+
     const room = getRoom(roomId);
     room.players = [];
     room.draft = emptyDraft();
     room.lastUpdated = Date.now();
+
+    // ★ DB反映（ここ！）
+    try { await clearPlayers(roomId); } catch(e){ console.error('[DB clearPlayers]', e); }
+    try { await resetDraft(roomId); } catch(e){ console.error('[DB resetDraft]', e); }
+
     io.to(roomId).emit('state:updated', room);
   });
 
   // ドラフト：指名/ロック
-  socket.on('draft:pick', ({ team, round, playerId })=>{
+  socket.on('draft:pick', async ({ team, round, playerId })=>{
     const room = getRoom(roomId); const d = room.draft; const role = socket.data.role;
     if(!role || team !== role) return;
     if(round<0 || round>=MAX_ROUNDS) return;
-    if(d.locks[team]) return; // ロック中は変更不可
+    if(d.locks[team]) return;
     const exists = room.players.some(p=>p.id===playerId) || playerId==='';
     if(!exists) return;
+
     d.picks[team][round] = playerId;
     room.lastUpdated = Date.now();
+
+    // ★ DB保存（ここ！）
+    try { await saveDraft(roomId, d); } catch(e){ console.error('[DB saveDraft pick]', e); }
+
     io.to(roomId).emit('draft:picksUpdated', d.picks);
   });
-  socket.on('draft:lock', ({ team, locked })=>{
+  socket.on('draft:lock', async ({ team, locked })=>{
     const room = getRoom(roomId); const d = room.draft; const role = socket.data.role;
     if(!role || team !== role) return;
+
     d.locks[team] = !!locked;
     room.lastUpdated = Date.now();
+
+    // ★ DB保存（ここ！）
+    try { await saveDraft(roomId, d); } catch(e){ console.error('[DB saveDraft lock]', e); }
+
     io.to(roomId).emit('draft:locksUpdated', d.locks);
   });
 
@@ -279,6 +336,7 @@ io.on('connection', (socket)=>{
         logs.push(`Cycle ${d.state.cycle} 開始：未充足チームがあるため再指名へ`);
       }
     }
+    try { await saveDraft(roomId, d); } catch(e){ console.error('[DB saveDraft progress]', e); }
 
     // ブロードキャスト
     io.to(roomId).emit('draft:resolved', { draft: d, logs });
@@ -289,10 +347,14 @@ io.on('connection', (socket)=>{
   });
 
   // 初期化
-  socket.on('draft:reset', ()=>{
+  socket.on('draft:reset', async ()=>{
     const room = getRoom(roomId);
     room.draft = emptyDraft();
     room.lastUpdated = Date.now();
+
+    // ★ DB反映（ここ！）
+    try { await resetDraft(roomId); } catch(e){ console.error('[DB resetDraft event]', e); }
+
     io.to(roomId).emit('state:updated', room);
     io.to(roomId).emit('draft:state', room.draft.state);
   });
@@ -313,9 +375,30 @@ io.on('connection', (socket)=>{
     io.to(roomId).emit('draft:state', room.draft.state);
   });
 });
+  socket.on('state:updated', (state)=>{
+    players = state.players;
+    draft = state.draft;
+    renderAll();
+  });
+
+const dbPlayers = await loadPlayers(roomId);
+const dbDraft = await loadDraft(roomId);
+
+if (dbPlayers.length) room.players = dbPlayers;
+if (dbDraft) {
+  room.draft = {
+    locks: dbDraft.locks,
+    picks: dbDraft.picks,
+    teams: dbDraft.teams,
+    state: dbDraft.state,
+  };
+}
 
 const PORT = process.env.PORT || 8080;
+await initDB();
 server.listen(PORT, ()=> console.log(`[server] listening on :${PORT}`));
+
+
 
 
 
