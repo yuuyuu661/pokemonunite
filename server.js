@@ -377,22 +377,11 @@ io.on('connection', async (socket) => { // ★ async を付ける
 });
 
 
-const dbPlayers = await loadPlayers(roomId);
-const dbDraft = await loadDraft(roomId);
-
-if (dbPlayers.length) room.players = dbPlayers;
-if (dbDraft) {
-  room.draft = {
-    locks: dbDraft.locks,
-    picks: dbDraft.picks,
-    teams: dbDraft.teams,
-    state: dbDraft.state,
-  };
-}
 
 const PORT = process.env.PORT || 8080;
 await initDB();
 server.listen(PORT, ()=> console.log(`[server] listening on :${PORT}`));
+
 
 
 
