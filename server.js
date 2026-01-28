@@ -7,6 +7,16 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import fs from 'fs/promises';
+import {
+  initDB,
+  loadPlayers,
+  savePlayer,
+  deletePlayer,
+  clearPlayers,
+  loadDraft,
+  saveDraft,
+  resetDraft
+} from './db.js';
 
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
@@ -306,5 +316,6 @@ io.on('connection', (socket)=>{
 
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, ()=> console.log(`[server] listening on :${PORT}`));
+
 
 
