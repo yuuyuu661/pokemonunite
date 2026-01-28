@@ -72,8 +72,8 @@
           <option value="ハイパー">ハイパー</option>
           <option value="エリート">エリート</option>
           <option value="エキスパート">エキスパート</option>
-          <option value="マスター1200">マスター1200</option>
-          <option value="マスター1400～1600">マスター1400～1600</option>
+          <option value="マスター">マスター</option>
+          <option value="レジェンド">レジェンド</option>
         </select>
         <div class="note">ポイント（自動）：<span id="autoPoint" class="pill">-</span></div>
       </div>
@@ -182,7 +182,7 @@
 <script src="/socket.io/socket.io.js"></script>
 <script>
 // ====== ユーティリティ ======
-const POINTS_BY_RANK = { 'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,'エキスパート':15,'マスター1200':15,'マスター1400～1600':20 };
+const POINTS_BY_RANK = { 'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,'エキスパート':15,'マスター':15,'レジェンド':20 };
 function escapeHTML(s){ return (s||'').replace(/[&<>\"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
 async function fileToDataURL(file){ return await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(file); }); }
 function badge(txt, cls='pill'){ return `<span class="${cls}">${txt}</span>`; }
@@ -499,4 +499,5 @@ socket.on('backup:data', (data)=>{
 </script>
 </body>
 </html>
+
 
