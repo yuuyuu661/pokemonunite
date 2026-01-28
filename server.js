@@ -375,11 +375,7 @@ io.on('connection', async (socket) => { // ★ async を付ける
     io.to(roomId).emit('draft:state', room.draft.state);
   });
 });
-  socket.on('state:updated', (state)=>{
-    players = state.players;
-    draft = state.draft;
-    renderAll();
-  });
+
 
 const dbPlayers = await loadPlayers(roomId);
 const dbDraft = await loadDraft(roomId);
@@ -397,6 +393,7 @@ if (dbDraft) {
 const PORT = process.env.PORT || 8080;
 await initDB();
 server.listen(PORT, ()=> console.log(`[server] listening on :${PORT}`));
+
 
 
 
