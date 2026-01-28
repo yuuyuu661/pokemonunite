@@ -67,7 +67,7 @@ const now = ()=> new Date().toISOString();
 
 const pointsByRank = {
   'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,
-  'エキスパート':15,'マスター1200':15,'マスター1400～1600':20
+  'エキスパート':15,'マスター':15,'レジェンド':20
 };
 
 // ====== 静的配信 & 画像一覧 ======
@@ -381,6 +381,7 @@ io.on('connection', async (socket) => { // ★ async を付ける
 const PORT = process.env.PORT || 8080;
 await initDB();
 server.listen(PORT, ()=> console.log(`[server] listening on :${PORT}`));
+
 
 
 
