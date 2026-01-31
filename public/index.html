@@ -191,10 +191,24 @@ function badge(txt, cls='pill'){ return `<span class="${cls}">${txt}</span>`; }
 const roomId = new URL(location.href).searchParams.get('room') || 'default';
 const socket = io('/', { auth: { room: roomId } });
 
-let MAX_ROUNDS = 5; let MAX_TEAM = 5; let TEAM_IDS = ['A','B']; let REQUIRE_LOCKS = false;
+let MAX_ROUNDS = 5; let MAX_TEAM = 5; let TEAM_IDS = ["A","B","C","D","E","F","G","H","I","J","K","L"]; let REQUIRE_LOCKS = false;
 let players = []; let draft = { locks:{}, picks:{}, teams:{}, state:{mode:'idle',cycle:1,round:0} };
 let imageFiles = [];
 let currentSort = null;
+const TEAM_LABELS = {
+  A:"みすい",
+  B:"あまいもん",
+  C:"どむ",
+  D:"悲鳴嶼行冥",
+  E:"syun",
+  F:"RaiSe",
+  G:"yuuki",
+  H:"ぬぬ",
+  I:"タケシ",
+  J:"イワーク",
+  K:"カスミ",
+  L:"スターミー"
+};
 
 socket.on('state:init', ({ state, maxRounds, teams, maxTeam, requireLocks })=>{
   MAX_ROUNDS = maxRounds; TEAM_IDS = teams; MAX_TEAM = maxTeam; REQUIRE_LOCKS = !!requireLocks;
@@ -368,7 +382,7 @@ const previewBox = document.getElementById('previewBox');
 function buildLoginCards(){
   loginGrid.innerHTML = TEAM_IDS.map(t=>`
     <div class="card">
-      <h3>リーダー${t} ログイン <span class="pill lock" id="lockBadge${t}">未ロック</span></h3>
+      <h3>リーダー${TEAM_LABELS[t]} ログイン <span class="pill lock" id="lockBadge${t}">未ロック</span></h3>
       <div class="row">
         <input type="password" id="pass${t}" placeholder="パスワード">
         <button class="btn" data-login="${t}">入室</button>
@@ -397,7 +411,7 @@ function buildLoginCards(){
 function buildTeamPanels(){
   teamsGrid.innerHTML = TEAM_IDS.map(t=>`
     <div class="card">
-      <h3>チーム${t}</h3>
+      <h3>チーム${TEAM_LABELS[t]}</h3>
       <div id="team${t}"></div>
     </div>`).join('');
 }
@@ -405,7 +419,7 @@ function buildTeamPanels(){
 function renderLocksBar(){
   locksBar.innerHTML = TEAM_IDS.map(t=>{
     const locked = !!draft.locks?.[t];
-    return badge(`${t}:${locked?'LOCK':'OPEN'}`, locked ? 'pill ok' : 'pill lock');
+    return badge(`${TEAM_LABELS[t]}:${locked?'LOCK':'OPEN'}`, locked ? 'pill ok' : 'pill lock');
   }).join('');
   TEAM_IDS.forEach(t=>{
     const outer = document.getElementById('lockBadge'+t);
@@ -499,5 +513,6 @@ socket.on('backup:data', (data)=>{
 </script>
 </body>
 </html>
+
 
 
