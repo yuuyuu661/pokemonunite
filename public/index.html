@@ -182,7 +182,7 @@
 <script src="/socket.io/socket.io.js"></script>
 <script>
 // ====== ユーティリティ ======
-const POINTS_BY_RANK = { 'ビギナー':5,'スーパー':5,'ハイパー':10,'エリート':10,'エキスパート':15,'マスター':15,'レジェンド':20 };
+const POINTS_BY_RANK = { 'スーパー':5,'ハイパー':5,'エリート':10,'エキスパート':10,'マスター':15,'レジェンド':20 };
 function escapeHTML(s){ return (s||'').replace(/[&<>\"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
 async function fileToDataURL(file){ return await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(file); }); }
 function badge(txt, cls='pill'){ return `<span class="${cls}">${txt}</span>`; }
@@ -196,15 +196,15 @@ let players = []; let draft = { locks:{}, picks:{}, teams:{}, state:{mode:'idle'
 let imageFiles = [];
 let currentSort = null;
 const TEAM_LABELS = {
-  A:"みすい",
-  B:"あまいもん",
-  C:"どむ",
-  D:"悲鳴嶼行冥",
-  E:"syun",
-  F:"RaiSe",
-  G:"yuuki",
-  H:"ぬぬ",
-  I:"タケシ",
+  A:"syun",
+  B:"眠",
+  C:"める",
+  D:"氷空",
+  E:"ふぜん",
+  F:"あかり",
+  G:"リウ",
+  H:"rRNA",
+  I:"よしだ",
   J:"イワーク",
   K:"カスミ",
   L:"スターミー"
