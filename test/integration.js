@@ -20,12 +20,15 @@ try {
   assert.equal((await request(b.s,'tournament:reset',{revision:0})).ok,false);
   assert.equal((await request(b.s,'admin:settings',{})).ok,false);
   assert.equal((await request(a.s,'admin:login',{pass:'wrong'})).ok,false);
+  assert.equal((await request(b.s,'player:add',{actionPass:'ACTION123',name:'unauthorized',rank:'スーパー'})).ok,false);
   const login=await request(a.s,'admin:login',{pass:'yamadayamada'});assert.ok(login.ok);
   let settings=login.settings;settings.teamNames.J='試験チームJ';settings.teamPasswords.J='new-j';settings.ranks.push({name:'試験ランク',points:42});
   const settingsEvent=event(b.s,'settings:updated'); assert.ok((await request(a.s,'admin:settings',settings)).ok);
   assert.equal((await settingsEvent).teamPasswords,undefined);
   const leader=event(b.s,'leader:ok');b.s.emit('leader:login',{team:'J',pass:'new-j'});assert.equal((await leader).role,'J');
-  const added=event(b.s,'players:updated');a.s.emit('player:add',{actionPass:'ACTION123',name:'試験選手',rank:'試験ランク',pokes:[]});const players=await added;assert.equal(players[0].points,42);
+  const added=event(b.s,'players:updated');a.s.emit('player:add',{name:'試験選手',rank:'試験ランク',pokes:[]});const players=await added;assert.equal(players[0].points,42);
+  assert.equal((await request(b.s,'player:update',{id:players[0].id,name:'unauthorized',rank:'試験ランク'})).ok,false);
+  const edited=event(b.s,'players:updated');a.s.emit('player:update',{id:players[0].id,name:'更新選手',rank:'試験ランク',pokes:[]});assert.equal((await edited)[0].name,'更新選手');
   const picked=event(a.s,'draft:picksUpdated');b.s.emit('draft:pick',{team:'J',round:0,playerId:players[0].id});assert.equal((await picked).J[0],players[0].id);
   const locked=event(a.s,'draft:locksUpdated');b.s.emit('draft:lock',{team:'J',locked:true});await locked;
   const preview=event(b.s,'draft:preview');a.s.emit('draft:revealLocked');assert.equal((await preview).entries[0].team,'J');
@@ -43,7 +46,7 @@ try {
   const persisted=await loadOptions('integration');assert.equal(bracket(persisted.tournament)[0].find(m=>m.id===match.id).winner,match.a.team);
   assert.equal(persisted.settings.teamPasswords.J,'new-j');
   const c=await connect();assert.equal(c.state.tournament.revision,revision+1);assert.equal(c.state.settings.teamPasswords,undefined);assert.equal(c.state.settings.teamNames.J,'試験チームJ');
-  a.s.emit('admin:logout');assert.equal((await request(a.s,'tournament:reset',{revision:revision+1})).ok,false);
+  a.s.emit('admin:logout');assert.equal((await request(a.s,'player:add',{name:'logged out',rank:'スーパー'})).ok,false);assert.equal((await request(a.s,'tournament:reset',{revision:revision+1})).ok,false);
   console.log('PASS: auth, 9→10 migration, realtime draft, settings, rank recalculation, draw, BO3, concurrency, persistence, public redaction');
 } catch(error){console.error(error);process.exitCode=1;}
 finally{clients.forEach(s=>s.disconnect());process.exit(process.exitCode||0);}

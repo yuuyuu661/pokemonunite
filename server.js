@@ -168,7 +168,7 @@ io.on('connection', async socket => {
 
   // 選手登録/編集/削除
   on('player:add', async (payload)=>{  // ★ async
-    if(!checkActionPass(payload?.actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
+    requireAdmin();
     const room = getRoom(roomId);
     if (!room.settings.ranks.some(r => r.name === payload.rank)) throw Error('ランクを選び直してください');
     const player = {
@@ -187,7 +187,7 @@ io.on('connection', async socket => {
     io.to(roomId).emit('players:updated', room.players);
   });
   on('player:update', async (payload)=>{ // ★ async
-    if(!checkActionPass(payload?.actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
+    requireAdmin();
     const room = getRoom(roomId);
     if (!room.settings.ranks.some(r => r.name === payload.rank)) throw Error('ランクを選び直してください');
     const ix = room.players.findIndex(p=>p.id===payload.id);

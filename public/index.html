@@ -52,15 +52,71 @@
   <div class="note">URL末尾に <code>?room=任意</code> でルーム分け。画像は <code>/images/</code> 配下から選択。</div>
 
   <div class="tabs" id="tabs">
-    <button class="tab active" data-panel="register">① 選手登録</button>
-    <button class="tab" data-panel="players">登録一覧</button>
-    <button class="tab" data-panel="draft">② ドラフト</button>
+    <button class="tab active" data-panel="players">登録一覧</button>
+    <button class="tab" data-panel="draft">ドラフト</button>
     <button class="tab" data-panel="tournament">トーナメント表</button>
     <button class="tab" data-panel="admin">管理メニュー</button>
   </div>
 
-  <!-- Register Panel -->
-  <section class="panel" id="panel-register">
+  <!-- Players Panel -->
+  <section class="panel" id="panel-players">
+    <div class="row" style="justify-content:space-between">
+      <div class="note">登録人数：<span id="playerCount">0</span></div>
+      <div class="row">
+        <button id="sortHigh" class="btn">ポイント高い順</button>
+        <button id="sortLow" class="btn">ポイント低い順</button>
+        <button id="clearAll" class="btn bad">全削除</button>
+      </div>
+    </div>
+    <div class="hr"></div>
+    <div id="playerList" class="list"></div>
+    <div class="note" style="margin-top:8px">※ 編集は管理メニューで行います。全削除・個別削除は操作パスワードが必要です</div>
+  </section>
+
+  <!-- Draft Panel -->
+  <section class="panel hidden" id="panel-draft">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div class="locksBar" id="locksBar"></div>
+      <div class="row">
+        <span class="pill">Cycle: <span id="cycleLab">-</span></span>
+        <span class="pill">Round: <span id="roundLab">-</span></span>
+        <span class="pill">Max Team: <span id="maxTeamLab">-</span></span>
+        <span class="pill" id="requireLocksLab">Locks Required: -</span>
+      </div>
+    </div>
+
+    <div class="teamGrid" id="loginGrid"></div>
+
+    <div class="hr"></div>
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div class="row">
+        <button class="btn acc" id="revealLocked">選抜メンバー開示</button>
+        <button class="btn warn" id="progressAll" disabled>ドラフト進行</button>
+        <button class="btn" id="resetDraft">ドラフト初期化</button>
+      </div>
+      <div class="note" id="progressNote">※ ロック済みチームの現在ラウンド指名を公開 → 「ドラフト進行」で一斉解決（d100）</div>
+    </div>
+
+    <div class="preview hidden" id="previewBox"></div>
+
+    <div class="teamGrid" id="teamsGrid"></div>
+
+    <div class="card" style="margin-top:12px">
+      <h3>ログ</h3>
+      <div id="log" class="note"></div>
+    </div>
+  </section>
+
+<section class="panel hidden" id="panel-tournament">
+    <div class="section-heading"><div><span class="eyebrow">LIVE TOURNAMENT · 10 TEAMS</span><h2>トーナメント表</h2></div><span class="pill" id="tournamentProgress">抽選待ち</span></div>
+    <p class="note">BO3・2試合先取で次の対戦へ進出。抽選とスコアはリアルタイムに更新されます。ここは閲覧専用です。</p>
+    <div id="champion" class="champion hidden"></div><div class="bracket-scroll"><div id="bracket" class="bracket"></div></div>
+  </section>
+  <section class="panel hidden" id="panel-admin">
+    <div class="section-heading"><div><span class="eyebrow">TOURNAMENT CONTROL</span><h2>管理メニュー</h2></div><button class="btn" id="adminLogout">管理を終了</button></div>
+    <p class="note">このルームの設定です。保存した内容は全員の画面に反映されます。</p>
+
+  <section class="admin-block" id="admin-registration"><h3>選手登録・編集</h3>
     <form id="playerForm" class="grid g2">
       <div>
         <label>プレイヤー名</label>
@@ -111,67 +167,10 @@
         <button type="submit" class="btn acc" id="btnRegister">登録する / 上書き保存</button>
         <button type="button" id="resetForm" class="btn">リセット</button>
       </div>
-      <div class="note">※ 登録・編集時に操作パスワードが必要です</div>
+      <div class="note">管理メニューにログイン中は、追加のパスワード入力なしで登録・編集できます。</div>
     </form>
   </section>
 
-  <!-- Players Panel -->
-  <section class="panel hidden" id="panel-players">
-    <div class="row" style="justify-content:space-between">
-      <div class="note">登録人数：<span id="playerCount">0</span></div>
-      <div class="row">
-        <button id="sortHigh" class="btn">ポイント高い順</button>
-        <button id="sortLow" class="btn">ポイント低い順</button>
-        <button id="clearAll" class="btn bad">全削除</button>
-      </div>
-    </div>
-    <div class="hr"></div>
-    <div id="playerList" class="list"></div>
-    <div class="note" style="margin-top:8px">※ 全削除・個別削除・編集は操作パスワードが必要です</div>
-  </section>
-
-  <!-- Draft Panel -->
-  <section class="panel hidden" id="panel-draft">
-    <div class="row" style="justify-content:space-between;align-items:center">
-      <div class="locksBar" id="locksBar"></div>
-      <div class="row">
-        <span class="pill">Cycle: <span id="cycleLab">-</span></span>
-        <span class="pill">Round: <span id="roundLab">-</span></span>
-        <span class="pill">Max Team: <span id="maxTeamLab">-</span></span>
-        <span class="pill" id="requireLocksLab">Locks Required: -</span>
-      </div>
-    </div>
-
-    <div class="teamGrid" id="loginGrid"></div>
-
-    <div class="hr"></div>
-    <div class="row" style="justify-content:space-between;align-items:center">
-      <div class="row">
-        <button class="btn acc" id="revealLocked">選抜メンバー開示</button>
-        <button class="btn warn" id="progressAll" disabled>ドラフト進行</button>
-        <button class="btn" id="resetDraft">ドラフト初期化</button>
-      </div>
-      <div class="note" id="progressNote">※ ロック済みチームの現在ラウンド指名を公開 → 「ドラフト進行」で一斉解決（d100）</div>
-    </div>
-
-    <div class="preview hidden" id="previewBox"></div>
-
-    <div class="teamGrid" id="teamsGrid"></div>
-
-    <div class="card" style="margin-top:12px">
-      <h3>ログ</h3>
-      <div id="log" class="note"></div>
-    </div>
-  </section>
-
-<section class="panel hidden" id="panel-tournament">
-    <div class="section-heading"><div><span class="eyebrow">LIVE TOURNAMENT · 10 TEAMS</span><h2>トーナメント表</h2></div><span class="pill" id="tournamentProgress">抽選待ち</span></div>
-    <p class="note">BO3・2試合先取で次の対戦へ進出。抽選とスコアはリアルタイムに更新されます。ここは閲覧専用です。</p>
-    <div id="champion" class="champion hidden"></div><div class="bracket-scroll"><div id="bracket" class="bracket"></div></div>
-  </section>
-  <section class="panel hidden" id="panel-admin">
-    <div class="section-heading"><div><span class="eyebrow">TOURNAMENT CONTROL</span><h2>管理メニュー</h2></div><button class="btn" id="adminLogout">管理を終了</button></div>
-    <p class="note">このルームの設定です。保存した内容は全員の画面に反映されます。</p>
     <div class="admin-block"><h3>01 / ルーレット抽選</h3><p class="note">10チームを1枠ずつ抽選。枠1〜6は1回戦シード、枠7〜10は1回戦から出場します。</p>
       <div class="roulette-layout"><div class="wheel-wrap"><span class="wheel-pointer">▼</span><canvas id="wheel" width="420" height="420" aria-label="チーム抽選ルーレット"></canvas></div>
       <div><label for="targetSeed">登録先</label><select id="targetSeed"></select><div class="row spaced"><button class="btn acc" id="spinButton">ルーレットを回す</button><button class="btn bad" id="resetTournament">抽選・勝敗をリセット</button></div><p id="rouletteResult" role="status">未抽選のチームから選びます</p><div id="allocationList" class="allocation-list"></div></div></div>
@@ -259,7 +258,7 @@ socket.on('player:updated:ok', ()=>{ alert('編集を保存しました'); reset
 
 // ====== タブ ======
 const tabs = document.querySelectorAll('.tab');
-const panels = Object.fromEntries(['register','players','draft','tournament','admin'].map(id=>[id, panel(id)]));
+const panels = Object.fromEntries(['players','draft','tournament','admin'].map(id=>[id, panel(id)]));
 function panel(id){ return document.getElementById('panel-'+id); }
 function showTab(id){
   if(id !== 'admin') tournamentUI.lock(false);
@@ -308,7 +307,7 @@ avatarInput.addEventListener('change', async (e)=>{ const f=e.target.files?.[0];
 
 form.addEventListener('submit', async (e)=>{
   e.preventDefault();
-  const actionPass = prompt('操作パスワードを入力してください'); if(!actionPass) return;
+
 
   const name = document.getElementById('pName').value.trim(); if(!name) return alert('名前');
   const rank = rankEl.value; const comment = document.getElementById('pComment').value.trim();
@@ -317,7 +316,7 @@ form.addEventListener('submit', async (e)=>{
   if(pokes.length<3 && !confirm('ポケモンが3枚未満です。このまま続行しますか？')) return;
 
   const editingId = document.getElementById('editId').value.trim();
-  const payload = { actionPass, name, rank, avatar, pokes: pokes.slice(0,3), comment };
+  const payload = { name, rank, avatar, pokes: pokes.slice(0,3), comment };
   if(editingId){ socket.emit('player:update', { id: editingId, ...payload }); }
   else{ socket.emit('player:add', payload); }
 
@@ -350,9 +349,9 @@ playerListEl.addEventListener('click', (e)=>{
     if(confirm('この選手を削除しますか？')) socket.emit('player:delOne', { id, actionPass });
 
   }else if(act==='edit'){
-    const actionPass = prompt('操作パスワード（編集を開始）'); if(!actionPass) return;
+
     const p = players.find(x=>x.id===id); if(!p) return;
-    document.querySelector('[data-panel="register"]').click();
+    tournamentUI.open();
     document.getElementById('pName').value = p.name;
     document.getElementById('pRank').value = p.rank; updatePoint();
     document.getElementById('pComment').value = p.comment || '';
