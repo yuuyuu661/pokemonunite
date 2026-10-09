@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ポケユナ 選手登録 & 9チームドラフト（開示→一斉進行 / d100）</title>
+  <title>ポケユナ 選手登録 & 10チームドラフト（開示→一斉進行 / d100）</title>
+  <link rel="stylesheet" href="/public/tournament.css">
   <style>
     :root{--bg:#0f172a;--card:#111827;--sub:#1f2937;--text:#e5e7eb;--muted:#9ca3af;--acc:#22d3ee;--good:#34d399;--bad:#f87171;--warn:#f59e0b}
     html,body{margin:0;padding:0;background:linear-gradient(180deg,#0b1220,#0f172a 40%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
@@ -47,14 +48,15 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🟣 ポケユナ選手登録 & 9チームドラフト（開示→一斉進行 / d100）</h1>
+  <h1>🟣 ポケユナ選手登録 & 10チームドラフト（開示→一斉進行 / d100）</h1>
   <div class="note">URL末尾に <code>?room=任意</code> でルーム分け。画像は <code>/images/</code> 配下から選択。</div>
 
   <div class="tabs" id="tabs">
     <button class="tab active" data-panel="register">① 選手登録</button>
     <button class="tab" data-panel="players">登録一覧</button>
     <button class="tab" data-panel="draft">② ドラフト</button>
-    <button class="tab" data-panel="backup">バックアップ</button>
+    <button class="tab" data-panel="tournament">トーナメント表</button>
+    <button class="tab" data-panel="admin">管理メニュー</button>
   </div>
 
   <!-- Register Panel -->
@@ -162,26 +164,31 @@
     </div>
   </section>
 
-  <!-- Backup Panel -->
-  <section class="panel hidden" id="panel-backup">
-    <div class="grid g2">
-      <div>
-        <h3>エクスポート</h3>
-        <button class="btn" id="exportBtn">JSONを書き出す</button>
-        <div class="note">※ 書き出し時に操作パスワードが必要です</div>
-      </div>
-      <div>
-        <h3>インポート</h3>
-        <input type="file" id="importFile" accept="application/json">
-      </div>
-    </div>
+<section class="panel hidden" id="panel-tournament">
+    <div class="section-heading"><div><span class="eyebrow">LIVE TOURNAMENT · 10 TEAMS</span><h2>トーナメント表</h2></div><span class="pill" id="tournamentProgress">抽選待ち</span></div>
+    <p class="note">BO3・2試合先取で次の対戦へ進出。抽選とスコアはリアルタイムに更新されます。ここは閲覧専用です。</p>
+    <div id="champion" class="champion hidden"></div><div class="bracket-scroll"><div id="bracket" class="bracket"></div></div>
   </section>
+  <section class="panel hidden" id="panel-admin">
+    <div class="section-heading"><div><span class="eyebrow">TOURNAMENT CONTROL</span><h2>管理メニュー</h2></div><button class="btn" id="adminLogout">管理を終了</button></div>
+    <p class="note">このルームの設定です。保存した内容は全員の画面に反映されます。</p>
+    <div class="admin-block"><h3>01 / ルーレット抽選</h3><p class="note">10チームを1枠ずつ抽選。枠1〜6は1回戦シード、枠7〜10は1回戦から出場します。</p>
+      <div class="roulette-layout"><div class="wheel-wrap"><span class="wheel-pointer">▼</span><canvas id="wheel" width="420" height="420" aria-label="チーム抽選ルーレット"></canvas></div>
+      <div><label for="targetSeed">登録先</label><select id="targetSeed"></select><div class="row spaced"><button class="btn acc" id="spinButton">ルーレットを回す</button><button class="btn bad" id="resetTournament">抽選・勝敗をリセット</button></div><p id="rouletteResult" role="status">未抽選のチームから選びます</p><div id="allocationList" class="allocation-list"></div></div></div>
+    </div>
+    <div class="admin-block"><h3>02 / BO3 スコア入力</h3><p class="note">各試合の得点を入力し「スコアを保存」。2勝したチームが自動で次へ進みます。2–0の場合は第3試合を空欄にしてください。対戦相手が変わる結果訂正では、後続の該当スコアが解除されます。</p><div id="scoreMatches" class="score-grid"></div></div>
+    <form id="settingsForm" class="admin-block"><h3>03 / チーム・ランク設定</h3><p class="note">名前はドラフトとトーナメント共通です。ランクのポイント変更は登録済み選手にも反映します。</p><div id="teamSettings" class="team-settings"></div><h4>ランク帯とポイント</h4><div id="rankSettings"></div><button type="button" class="btn" id="addRank">＋ ランク帯を追加</button><div class="spaced"><button type="submit" class="btn acc">設定を保存</button></div></form>
+  </section>
+  <dialog id="adminDialog"><form id="adminLoginForm"><h2>管理メニュー</h2><p class="note">管理パスワードを入力してください</p><input type="password" id="adminPass" aria-label="管理パスワード" autocomplete="current-password" required><p id="adminLoginError" role="alert"></p><div class="row"><button class="btn acc" type="submit">ログイン</button><button class="btn" type="button" id="adminCancel">キャンセル</button></div></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
-<script>
+<script type="module">
+import { mountTournament } from "/public/tournament-ui.js";
 // ====== ユーティリティ ======
-const POINTS_BY_RANK = { 'スーパー':5,'ハイパー':5,'エリート':10,'エキスパート':10,'マスター':15,'レジェンド':20 };
+let POINTS_BY_RANK = { 'スーパー':5,'ハイパー':5,'エリート':10,'エキスパート':10,'マスター':15,'レジェンド':20 };
 function escapeHTML(s){ return (s||'').replace(/[&<>\"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
 async function fileToDataURL(file){ return await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(file); }); }
 function badge(txt, cls='pill'){ return `<span class="${cls}">${txt}</span>`; }
@@ -190,11 +197,12 @@ function badge(txt, cls='pill'){ return `<span class="${cls}">${txt}</span>`; }
 const roomId = new URL(location.href).searchParams.get('room') || 'default';
 const socket = io('/', { auth: { room: roomId } });
 
-let MAX_ROUNDS = 5; let MAX_TEAM = 5; let TEAM_IDS = ["A","B","C","D","E","F","G","H","I","J","K","L"]; let REQUIRE_LOCKS = false;
+let MAX_ROUNDS = 5; let MAX_TEAM = 5; let TEAM_IDS = [..."ABCDEFGHIJ"]; let REQUIRE_LOCKS = false;
 let players = []; let draft = { locks:{}, picks:{}, teams:{}, state:{mode:'idle',cycle:1,round:0} };
 let imageFiles = [];
 let currentSort = null;
-const TEAM_LABELS = {
+let leaderRole = null;
+let TEAM_LABELS = {
   A:"syun",
   B:"眠",
   C:"める",
@@ -214,7 +222,8 @@ socket.on('state:init', ({ state, maxRounds, teams, maxTeam, requireLocks })=>{
   document.getElementById('maxTeamLab').textContent = String(MAX_TEAM);
   document.getElementById('requireLocksLab').textContent = `Locks Required: ${REQUIRE_LOCKS?'Yes':'No'}`;
   players = state.players; draft = state.draft;
-  renderAll(); buildLoginCards(); buildTeamPanels(); fetchImages();
+  applySettings(state.settings); tournamentUI.update(state.tournament);
+  renderAll(); fetchImages();
   updateStateBar(); updateButtons();
 });
 socket.on('players:updated', (list)=>{ players=list; renderPlayers(); refreshPickers(); renderTeams(); });
@@ -223,6 +232,7 @@ socket.on('state:updated', (state)=>{
   draft = state.draft;
   renderAll();
 });
+socket.on('settings:updated', settings => { applySettings(settings); renderAll(); });
 socket.on('draft:picksUpdated', (picks)=>{ draft.picks=picks; refreshPickers(); });
 socket.on('draft:locksUpdated', (locks)=>{ draft.locks=locks; refreshPickers(); renderLocksBar(); updateButtons(); });
 socket.on('draft:resolved', ({draft: d, logs})=>{ draft=d; logs.forEach(appendLog); refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); hidePreview(); updateButtons(); });
@@ -233,7 +243,7 @@ socket.on('draft:preview', ({ round, cycle, entries })=>{
   if(!entries.length){
     box.innerHTML = `<strong>R${round} / Cycle ${cycle}</strong><div class="note">ロック済みの指名はありません。</div>`;
   }else{
-    const rows = entries.map(e=>`<div class="row"><span class="pill">${e.team}</span> <span>${escapeHTML(e.name)}</span> <span class="tag">${e.points}pt</span></div>`).join('');
+    const rows = entries.map(e=>`<div class="row"><span class="pill">${escapeHTML(TEAM_LABELS[e.team] || e.team)}</span> <span>${escapeHTML(e.name)}</span> <span class="tag">${e.points}pt</span></div>`).join('');
     box.innerHTML = `<strong>R${round} / Cycle ${cycle} — ロック済みの選抜メンバー</strong><div style="margin-top:6px">${rows}</div>`;
   }
   box.classList.remove('hidden');
@@ -241,23 +251,35 @@ socket.on('draft:preview', ({ round, cycle, entries })=>{
 });
 
 socket.on('action:err', ({message})=> alert(message));
-socket.on('leader:ok', ({role})=>{ const area=document.getElementById('area'+role); if(area) area.classList.remove('hidden'); });
+socket.on('leader:ok', ({role})=>{ leaderRole = role; buildLoginCards(); refreshPickers(); renderLocksBar(); });
+socket.on('leader:revoked', ()=>{ leaderRole=null; buildLoginCards(); refreshPickers(); });
+socket.on('disconnect', ()=>{ leaderRole=null; tournamentUI.lock(); buildLoginCards(); });
 socket.on('leader:err', ({message})=> alert(message));
 socket.on('player:updated:ok', ()=>{ alert('編集を保存しました'); resetEditFormLabel(); });
 
 // ====== タブ ======
 const tabs = document.querySelectorAll('.tab');
-const panels = { register:panel('register'), players:panel('players'), draft:panel('draft'), backup:panel('backup') };
+const panels = Object.fromEntries(['register','players','draft','tournament','admin'].map(id=>[id, panel(id)]));
 function panel(id){ return document.getElementById('panel-'+id); }
-for(const t of tabs){
-  t.addEventListener('click', ()=>{
-    tabs.forEach(x=>x.classList.remove('active'));
-    t.classList.add('active');
-    Object.values(panels).forEach(p=>p.classList.add('hidden'));
-    panels[t.dataset.panel].classList.remove('hidden');
-    if(t.dataset.panel==='players') renderPlayers();
-    if(t.dataset.panel==='draft'){ refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); updateButtons(); }
-  });
+function showTab(id){
+  if(id !== 'admin') tournamentUI.lock(false);
+  tabs.forEach(t=>t.classList.toggle('active', t.dataset.panel===id));
+  Object.entries(panels).forEach(([key,p])=>p.classList.toggle('hidden',key!==id));
+  if(id==='players') renderPlayers();
+  if(id==='draft'){ refreshPickers(); renderTeams(); renderLocksBar(); updateStateBar(); updateButtons(); }
+}
+const tournamentUI = mountTournament(socket, showTab);
+for(const t of tabs) t.addEventListener('click', ()=>{
+  if(t.dataset.panel==='admin') tournamentUI.open(); else showTab(t.dataset.panel);
+});
+function applySettings(settings){
+  if(!settings) return;
+  TEAM_LABELS = settings.teamNames;
+  POINTS_BY_RANK = Object.fromEntries(settings.ranks.map(r=>[r.name,r.points]));
+  const selected = rankEl.value;
+  rankEl.innerHTML = settings.ranks.map(r=>'<option value="'+escapeHTML(r.name)+'">'+escapeHTML(r.name)+'</option>').join('');
+  if(settings.ranks.some(r=>r.name===selected)) rankEl.value=selected;
+  updatePoint(); tournamentUI.settings(settings);
 }
 
 // ====== ランク→ポイント ======
@@ -351,11 +373,11 @@ function renderPlayers(){
   playerListEl.innerHTML = list.map(p=>`
     <div class="card">
       <div class="row">
-        <img class="avatar" src="${p.avatar||''}" alt="avatar" onerror="this.style.display='none'">
+        <img class="avatar" src="${escapeHTML(p.avatar||'')}" alt="avatar" onerror="this.style.display='none'">
         <div style="min-width:0">
           <div style="font-weight:600">${escapeHTML(p.name)} <span class="tag">${escapeHTML(p.rank)} / ${p.points}pt</span></div>
           <div class="note" style="white-space:pre-wrap;margin-top:4px">${escapeHTML(p.comment||'')}</div>
-          <div class="row" style="margin-top:6px">${(p.pokes||[]).map(src=>`<img class='pokeThumb' src='${src}' alt='poke'>`).join('')}</div>
+          <div class="row" style="margin-top:6px">${(p.pokes||[]).map(src=>`<img class='pokeThumb' src='${escapeHTML(src)}' alt='poke'>`).join('')}</div>
           <div class="row" style="margin-top:8px">
             <button class="btn"      data-act="edit" data-id="${p.id}">編集</button>
             <button class="btn bad"  data-act="del"  data-id="${p.id}">削除</button>
@@ -381,12 +403,12 @@ const previewBox = document.getElementById('previewBox');
 function buildLoginCards(){
   loginGrid.innerHTML = TEAM_IDS.map(t=>`
     <div class="card">
-      <h3>リーダー${TEAM_LABELS[t]} ログイン <span class="pill lock" id="lockBadge${t}">未ロック</span></h3>
+      <h3>リーダー${escapeHTML(TEAM_LABELS[t])} ログイン <span class="pill lock" id="lockBadge${t}">未ロック</span></h3>
       <div class="row">
         <input type="password" id="pass${t}" placeholder="パスワード">
         <button class="btn" data-login="${t}">入室</button>
       </div>
-      <div id="area${t}" class="hidden">
+      <div id="area${t}" class="${leaderRole === t ? '' : 'hidden'}">
         <div class="row" style="justify-content:space-between;align-items:center;margin-top:8px">
           <div class="pill lock" id="lockBadgeInner${t}">未ロック</div>
           <button class="btn" data-lock="${t}">ロック</button>
@@ -402,7 +424,7 @@ function buildLoginCards(){
     btn.addEventListener('click', ()=>{
       const t = btn.dataset.login;
       const pass = document.getElementById('pass'+t).value;
-      socket.emit('leader:login',{pass});
+      socket.emit('leader:login',{pass,team:t});
     });
   });
 }
@@ -410,7 +432,7 @@ function buildLoginCards(){
 function buildTeamPanels(){
   teamsGrid.innerHTML = TEAM_IDS.map(t=>`
     <div class="card">
-      <h3>チーム${TEAM_LABELS[t]}</h3>
+      <h3>チーム${escapeHTML(TEAM_LABELS[t])}</h3>
       <div id="team${t}"></div>
     </div>`).join('');
 }
@@ -418,7 +440,7 @@ function buildTeamPanels(){
 function renderLocksBar(){
   locksBar.innerHTML = TEAM_IDS.map(t=>{
     const locked = !!draft.locks?.[t];
-    return badge(`${TEAM_LABELS[t]}:${locked?'LOCK':'OPEN'}`, locked ? 'pill ok' : 'pill lock');
+    return badge(`${escapeHTML(TEAM_LABELS[t])}:${locked?'LOCK':'OPEN'}`, locked ? 'pill ok' : 'pill lock');
   }).join('');
   TEAM_IDS.forEach(t=>{
     const outer = document.getElementById('lockBadge'+t);
@@ -462,7 +484,7 @@ function renderTeams(){
       const p = players.find(x=>x.id===id); if(!p) return '';
       return `<div class="row" style="margin:6px 0">
         <span class="pill">${i+1}</span>
-        <img class="avatar" src="${p.avatar||''}" alt="av" onerror="this.style.display='none'">
+        <img class="avatar" src="${escapeHTML(p.avatar||'')}" alt="av" onerror="this.style.display='none'">
         <div><div style="font-weight:600">${escapeHTML(p.name)} <span class="tag">${p.points}pt</span></div>
         <div class="note">${escapeHTML(p.rank)}</div></div></div>`;
     }).join('');
@@ -483,7 +505,7 @@ function hidePreview(){ previewBox.classList.add('hidden'); previewBox.innerHTML
 
 function appendLog(line){
   const time=new Date().toLocaleTimeString('ja-JP',{hour12:false});
-  logEl.innerHTML += `<div>[${time}] ${line}</div>`;
+  logEl.innerHTML += `<div>[${time}] ${escapeHTML(line)}</div>`;
   logEl.scrollTop = logEl.scrollHeight;
 }
 
@@ -493,22 +515,6 @@ progressBtn.addEventListener('click', ()=> socket.emit('draft:progress'));
 
 function renderAll(){ renderPlayers(); buildLoginCards(); refreshPickers(); buildTeamPanels(); renderTeams(); renderLocksBar(); updateStateBar(); updateButtons(); }
 
-// ====== バックアップ ======
-const exportBtn = document.getElementById('exportBtn');
-exportBtn.addEventListener('click', ()=>{
-  const actionPass = prompt('操作パスワード（書き出し）'); if(!actionPass) return;
-  socket.emit('backup:export', { actionPass });
-});
-const importFile = document.getElementById('importFile');
-importFile.addEventListener('change', async (e)=>{
-  const f = e.target.files?.[0]; if(!f) return; const text = await f.text();
-  try{ const data = JSON.parse(text); socket.emit('backup:import', data); alert('読み込み完了'); }catch{ alert('JSONが不正です'); }
-});
-socket.on('backup:data', (data)=>{
-  const blob = new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-  const url = URL.createObjectURL(blob); const a=document.createElement('a');
-  a.href=url; a.download='unite_draft_backup.json'; a.click(); URL.revokeObjectURL(url);
-});
 </script>
 </body>
 </html>

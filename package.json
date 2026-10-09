@@ -1,18 +1,23 @@
 {
-  "name": "unite-draft-realtime-9teams",
+  "name": "unite-draft-realtime-10teams",
   "private": true,
+  "packageManager": "pnpm@11.25.0",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test test/rules.test.js && node test/integration.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "socket.io": "^4.7.5",
-    "pg": "^8.11.5"
+    "pg": "^8.11.5",
+    "socket.io": "^4.7.5"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24 <25"
+  },
+  "devDependencies": {
+    "pg-mem": "^3.0.14",
+    "socket.io-client": "^4.8.4"
   }
 }
-

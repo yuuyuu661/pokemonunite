@@ -13,6 +13,9 @@ const pool = new Pool({
 // 初期化
 // ==============================
 export async function initDB() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS room_options (
+    room TEXT PRIMARY KEY, settings JSONB, tournament JSONB
+  )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS players (
       id TEXT PRIMARY KEY,
@@ -37,6 +40,25 @@ export async function initDB() {
       updated_at TIMESTAMP DEFAULT NOW()
     );
   `);
+}
+
+export async function loadOptions(room) {
+  return (await pool.query('SELECT settings, tournament FROM room_options WHERE room=$1', [room])).rows[0] || {};
+}
+export async function saveTournament(room, tournament) {
+  await pool.query(`INSERT INTO room_options (room,tournament) VALUES ($1,$2)
+    ON CONFLICT (room) DO UPDATE SET tournament=EXCLUDED.tournament`, [room, JSON.stringify(tournament)]);
+}
+export async function saveSettings(room, settings) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`INSERT INTO room_options (room,settings) VALUES ($1,$2)
+      ON CONFLICT (room) DO UPDATE SET settings=EXCLUDED.settings`, [room, JSON.stringify(settings)]);
+    for (const rank of settings.ranks) await client.query('UPDATE players SET points=$1 WHERE room=$2 AND rank=$3', [rank.points,room,rank.name]);
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }
 
 // ==============================

@@ -7,6 +7,9 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import fs from 'fs/promises';
+import { TEAM_IDS, emptyTournament, drawTeam, setMatchScore } from './public/tournament-rules.js';
+import { ADMIN_PASSWORD, defaultSettings, publicSettings, validateSettings } from './settings.js';
+import { loadOptions, saveSettings, saveTournament } from './db.js';
 import {
   initDB,
   loadPlayers,
@@ -27,19 +30,11 @@ const server = http.createServer(app);
 const io = new SocketIOServer(server, { cors: { origin: '*' } });
 
 // ====== 環境変数 ======
-const TEAM_IDS = (process.env.TEAMS || 'A,B,C,D,E,F,G,H,I').split(',').map(s=>s.trim()).filter(Boolean);
 const MAX_ROUNDS = Number(process.env.MAX_ROUNDS || 5);
 const MAX_TEAM   = Number(process.env.MAX_TEAM   || 5);
 const ACTION_PASS = process.env.ACTION_PASS || 'ACTION123';
 const REQUIRE_LOCKS = String(process.env.REQUIRE_LOCKS || 'false').toLowerCase() === 'true';
 
-// チームパス
-const defaultPass = ['111','222','333','444','555','666','777','888','999','1010','1111','1212',];
-const teamPasses = Object.fromEntries(TEAM_IDS.map((t, i)=>{
-  const envKey = `LEADER_${t}_PASS`;
-  const fallback = defaultPass[i] || `PASS${t}`;
-  return [t, process.env[envKey] || fallback];
-}));
 
 // ====== 状態（メモリ） ======
 const rooms = new Map();
@@ -56,6 +51,8 @@ function getRoom(roomId='default'){
     rooms.set(roomId, {
       players: [],
       draft: emptyDraft(),
+      settings: defaultSettings(),
+      tournament: emptyTournament(),
       createdAt: Date.now(),
       lastUpdated: Date.now(),
     });
@@ -64,85 +61,121 @@ function getRoom(roomId='default'){
 }
 const uid = ()=> crypto.randomBytes(5).toString('hex');
 const now = ()=> new Date().toISOString();
-
-const pointsByRank = {
-  'ビギナー':5,'スーパー':5,'ハイパー':5,'エリート':10,
-  'エキスパート':10,'マスター':15,'レジェンド':20
-};
-
-// ====== 静的配信 & 画像一覧 ======
-app.use('/public', express.static(path.join(__dirname, 'public')));
-app.use('/images', express.static(path.join(__dirname, 'public', 'images')));
-app.get('/', (_, res)=> res.sendFile(path.join(__dirname, 'public', 'index.html')));
-app.get('/api/images', async (_, res)=>{
-  try{
-    const dir = path.join(__dirname, 'public', 'images');
-    const files = await fs.readdir(dir);
-    const allow = new Set(['.png','.jpg','.jpeg','.webp','.gif','.bmp','.svg']);
-    const list = files.filter(f=> allow.has(path.extname(f).toLowerCase()));
-    res.json({ files: list });
-  }catch{ res.json({ files: [] }); }
-});
-app.get('/healthz', (_,res)=> res.json({
-  ok:true, time: now(), teams: TEAM_IDS, rounds: MAX_ROUNDS, maxTeam: MAX_TEAM, requireLocks: REQUIRE_LOCKS
-}));
-
-// ====== Socket.IO ======
-io.on('connection', async (socket) => { // ★ async を付ける
-  const { room: roomQuery } = socket.handshake.auth || {};
-  const roomId = (roomQuery && String(roomQuery)) || 'default';
-  socket.join(roomId);
-  socket.data.roomId = roomId;
-
-  const state = getRoom(roomId);
-
-  // ★ DBから復元（初回接続時）
-  try {
-    const dbPlayers = await loadPlayers(roomId);
-    const dbDraftRow = await loadDraft(roomId);
-
-    if (dbPlayers?.length) state.players = dbPlayers;
-
-    if (dbDraftRow) {
+const publicRoom = room => ({ ...room, settings: publicSettings(room.settings) });
+const roomLoads = new Map();
+const roomQueues = new Map();
+async function restoreRoom(roomId) {
+  if (!roomLoads.has(roomId)) roomLoads.set(roomId, (async () => {
+    const state = getRoom(roomId);
+    const [players, saved, options] = await Promise.all([loadPlayers(roomId), loadDraft(roomId), loadOptions(roomId)]);
+    state.players = players;
+    if (saved) {
+      const base = emptyDraft();
       state.draft = {
-        locks: dbDraftRow.locks || Object.fromEntries(TEAM_IDS.map(t=>[t,false])),
-        picks: dbDraftRow.picks || Object.fromEntries(TEAM_IDS.map(t=>[t, Array(MAX_ROUNDS).fill('')])),
-        teams: dbDraftRow.teams || Object.fromEntries(TEAM_IDS.map(t=>[t, []])),
-        state: dbDraftRow.state || { mode:'idle', cycle: 1, round: 0 },
+        locks: { ...base.locks, ...saved.locks }, picks: { ...base.picks, ...saved.picks },
+        teams: { ...base.teams, ...saved.teams }, state: saved.state || base.state
       };
     }
-  } catch (e) {
-    console.error('[DB restore error]', e);
-    // DB不調でもメモリで動くように継続
-  }
+    state.settings = options.settings || defaultSettings();
+    // Preserve any legacy rank already used by registered players.
+    for (const p of players) if (!state.settings.ranks.some(r => r.name === p.rank)) state.settings.ranks.push({ name: p.rank, points: p.points });
+    state.tournament = options.tournament || emptyTournament();
+  })().catch(error => { roomLoads.delete(roomId); throw error; }));
+  return roomLoads.get(roomId);
+}
 
-  socket.emit('state:init', {
-    state,
-    maxRounds: MAX_ROUNDS,
-    teams: TEAM_IDS,
-    maxTeam: MAX_TEAM,
-    requireLocks: REQUIRE_LOCKS
+app.use('/public', express.static(path.join(__dirname, 'public')));
+app.use('/images', express.static(path.join(__dirname, 'public', 'images')));
+app.get('/', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/api/images', async (_, res) => {
+  try {
+    const files = await fs.readdir(path.join(__dirname, 'public', 'images'));
+    res.json({ files: files.filter(f => /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(f)) });
+  } catch { res.json({ files: [] }); }
+});
+app.get('/healthz', (_,res) => res.json({ ok:true, time:now(), teams:TEAM_IDS, rounds:MAX_ROUNDS, maxTeam:MAX_TEAM, requireLocks:REQUIRE_LOCKS }));
+io.on('connection', async socket => {
+  const roomId = String(socket.handshake.auth?.room || 'default').slice(0,100);
+  socket.data.roomId = roomId;
+  try { await restoreRoom(roomId); }
+  catch (e) { console.error('[DB restore]', e); socket.emit('action:err', { message:'データを読み込めませんでした。再読み込みしてください' }); return socket.disconnect(); }
+  if (!socket.connected) return;
+  socket.join(roomId);
+  const on = (event, handler) => socket.on(event, (...args) => {
+    const job = (roomQueues.get(roomId) || Promise.resolve()).then(() => handler(...args)).catch(error => {
+      console.error(`[${event}]`, error.message);
+      const ack = args.at(-1);
+      if (typeof ack === 'function') ack({ ok:false, error:error.message });
+      else socket.emit('action:err', { message:error.message });
+    });
+    roomQueues.set(roomId, job);
   });
-
-  // 認証
-  socket.on('leader:login', ({ pass })=>{
-    const hit = TEAM_IDS.find(t => pass === teamPasses[t]);
-    if(hit){ socket.data.role = hit; socket.emit('leader:ok', { role: hit }); }
-    else { socket.emit('leader:err', { message: 'パスワードが違います' }); }
+  socket.emit('state:init', { state:publicRoom(getRoom(roomId)), maxRounds:MAX_ROUNDS, teams:TEAM_IDS, maxTeam:MAX_TEAM, requireLocks:REQUIRE_LOCKS });
+  on('leader:login', ({ pass, team }) => {
+    if (TEAM_IDS.includes(team) && getRoom(roomId).settings.teamPasswords[team] === pass) { socket.data.role = team; socket.emit('leader:ok', { role:team }); }
+    else socket.emit('leader:err', { message:'パスワードが違います' });
   });
-
-  // 操作パス検証
-  const checkActionPass = (p)=> p && p === ACTION_PASS;
+  const checkActionPass = p => p && p === ACTION_PASS;
+  on('admin:login', ({ pass } = {}, ack) => {
+    socket.data.admin = pass === ADMIN_PASSWORD;
+    if (!socket.data.admin) throw Error('パスワードが違います');
+    if (typeof ack === 'function') ack({ ok:true, settings:getRoom(roomId).settings });
+  });
+  on('admin:logout', () => { socket.data.admin = false; });
+  const requireAdmin = () => { if (!socket.data.admin) throw Error('管理メニューで認証してください'); };
+  const requireRevision = revision => { if (revision !== getRoom(roomId).tournament.revision) throw Error('表が更新されました。最新の対戦内容を確認して再入力してください'); };
+  on('admin:settings', async (input, ack) => {
+    requireAdmin();
+    const room = getRoom(roomId);
+    const next = validateSettings(input, room.settings, room.players);
+    await saveSettings(roomId, next);
+    const changed = TEAM_IDS.filter(t => next.teamPasswords[t] !== room.settings.teamPasswords[t]);
+    room.settings = next;
+    room.players.forEach(p => { p.points = next.ranks.find(r => r.name === p.rank).points; });
+    for (const client of io.sockets.sockets.values()) {
+      if (client.data.roomId === roomId && changed.includes(client.data.role)) { client.data.role = null; client.emit('leader:revoked'); }
+    }
+    io.to(roomId).emit('settings:updated', publicSettings(next));
+    io.to(roomId).emit('players:updated', room.players);
+    if (typeof ack === 'function') ack({ ok: true, settings: next });
+  });
+  on('tournament:draw', async ({ seed, revision }, ack) => {
+    requireAdmin(); requireRevision(revision);
+    const room = getRoom(roomId);
+    const count = TEAM_IDS.filter(t => !room.tournament.slots.includes(t)).length;
+    if (!count) throw Error('全チームの抽選が完了しています');
+    const result = drawTeam(room.tournament, seed, crypto.randomInt(count));
+    await saveTournament(roomId, result.tournament);
+    room.tournament = result.tournament;
+    io.to(roomId).emit('tournament:updated', room.tournament);
+    if (typeof ack === 'function') ack({ ok: true, team: result.team, tournament: room.tournament });
+  });
+  on('tournament:score', async ({ matchId, games, revision }, ack) => {
+    requireAdmin(); requireRevision(revision);
+    const room = getRoom(roomId);
+    const next = setMatchScore(room.tournament, matchId, games);
+    await saveTournament(roomId, next); room.tournament = next;
+    io.to(roomId).emit('tournament:updated', next);
+    if (typeof ack === 'function') ack({ ok: true });
+  });
+  on('tournament:reset', async ({ revision }, ack) => {
+    requireAdmin(); requireRevision(revision);
+    const room = getRoom(roomId), next = emptyTournament(room.tournament.revision + 1);
+    await saveTournament(roomId, next); room.tournament = next;
+    io.to(roomId).emit('tournament:updated', next);
+    if (typeof ack === 'function') ack({ ok: true });
+  });
 
   // 選手登録/編集/削除
-  socket.on('player:add', async (payload)=>{  // ★ async
+  on('player:add', async (payload)=>{  // ★ async
     if(!checkActionPass(payload?.actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
+    if (!room.settings.ranks.some(r => r.name === payload.rank)) throw Error('ランクを選び直してください');
     const player = {
       id: uid(),
       name: String(payload.name||'').slice(0,50),
       rank: payload.rank,
-      points: pointsByRank[payload.rank] ?? 0,
+      points: room.settings.ranks.find(r => r.name === payload.rank)?.points ?? 0,
       avatar: payload.avatar || '',
       pokes: Array.isArray(payload.pokes) ? payload.pokes.slice(0,3) : [],
       comment: String(payload.comment||'').slice(0,300)
@@ -153,16 +186,17 @@ io.on('connection', async (socket) => { // ★ async を付ける
 
     io.to(roomId).emit('players:updated', room.players);
   });
-  socket.on('player:update', async (payload)=>{ // ★ async
+  on('player:update', async (payload)=>{ // ★ async
     if(!checkActionPass(payload?.actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
+    if (!room.settings.ranks.some(r => r.name === payload.rank)) throw Error('ランクを選び直してください');
     const ix = room.players.findIndex(p=>p.id===payload.id);
     if(ix < 0) return;
 
   const p = room.players[ix];
     p.name = String(payload.name||'').slice(0,50);
     p.rank = payload.rank;
-    p.points = pointsByRank[p.rank] ?? 0;
+    p.points = room.settings.ranks.find(r => r.name === p.rank)?.points ?? 0;
     p.avatar = payload.avatar || '';
     p.pokes = Array.isArray(payload.pokes) ? payload.pokes.slice(0,3) : [];
     p.comment = String(payload.comment||'').slice(0,300);
@@ -174,7 +208,7 @@ io.on('connection', async (socket) => { // ★ async を付ける
       io.to(roomId).emit('players:updated', room.players);
       io.to(socket.id).emit('player:updated:ok', { id: payload.id });
     });
-  socket.on('player:delOne', async ({ id, actionPass })=>{ // ★ async
+  on('player:delOne', async ({ id, actionPass })=>{ // ★ async
     if(!checkActionPass(actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
     const room = getRoom(roomId);
     const d = room.draft;
@@ -191,9 +225,9 @@ io.on('connection', async (socket) => { // ★ async を付ける
     try { await deletePlayer(roomId, id); } catch(e){ console.error('[DB deletePlayer]', e); }
     try { await saveDraft(roomId, d); } catch(e){ console.error('[DB saveDraft after del]', e); }
 
-    io.to(roomId).emit('state:updated', room);
+    io.to(roomId).emit('state:updated', publicRoom(room));
   });
-  socket.on('players:clearAll', async ({ actionPass })=>{
+  on('players:clearAll', async ({ actionPass })=>{
     if(!checkActionPass(actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
 
     const room = getRoom(roomId);
@@ -205,14 +239,14 @@ io.on('connection', async (socket) => { // ★ async を付ける
     try { await clearPlayers(roomId); } catch(e){ console.error('[DB clearPlayers]', e); }
     try { await resetDraft(roomId); } catch(e){ console.error('[DB resetDraft]', e); }
 
-    io.to(roomId).emit('state:updated', room);
+    io.to(roomId).emit('state:updated', publicRoom(room));
   });
 
   // ドラフト：指名/ロック
-  socket.on('draft:pick', async ({ team, round, playerId })=>{
+  on('draft:pick', async ({ team, round, playerId })=>{
     const room = getRoom(roomId); const d = room.draft; const role = socket.data.role;
     if(!role || team !== role) return;
-    if(round<0 || round>=MAX_ROUNDS) return;
+    if(!Number.isInteger(round) || round<0 || round>=MAX_ROUNDS) return;
     if(d.locks[team]) return;
     const exists = room.players.some(p=>p.id===playerId) || playerId==='';
     if(!exists) return;
@@ -225,7 +259,7 @@ io.on('connection', async (socket) => { // ★ async を付ける
 
     io.to(roomId).emit('draft:picksUpdated', d.picks);
   });
-  socket.on('draft:lock', async ({ team, locked })=>{
+  on('draft:lock', async ({ team, locked })=>{
     const room = getRoom(roomId); const d = room.draft; const role = socket.data.role;
     if(!role || team !== role) return;
 
@@ -242,7 +276,7 @@ io.on('connection', async (socket) => { // ★ async を付ける
   const rnd100 = ()=> 1 + Math.floor(Math.random()*100);
 
   // 開示：ロック済みチームの現在ラウンドを全員に見せる
-  socket.on('draft:revealLocked', ()=>{
+  on('draft:revealLocked', ()=>{
     const room = getRoom(roomId); const d = room.draft;
     if(d.state.mode === 'idle'){ d.state = { mode:'sequential', cycle: d.state.cycle || 1, round: d.state.round || 0 }; }
     const r = d.state.round;
@@ -258,7 +292,7 @@ io.on('connection', async (socket) => { // ★ async を付ける
   });
 
   // 進行：ロック済み分のみ一斉解決（※ここではロックを解除しない）
-  socket.on('draft:progress', async ()=>{
+  on('draft:progress', async ()=>{
     const room = getRoom(roomId); const d = room.draft;
     if(d.state.mode !== 'sequential') d.state = { mode:'sequential', cycle: 1, round: 0 };
     const r = d.state.round;
@@ -324,10 +358,11 @@ io.on('connection', async (socket) => { // ★ async を付ける
       if(allFull){
         d.state = { mode: 'idle', cycle: d.state.cycle, round: MAX_ROUNDS };
         logs.push(`ドラフト完了（全チーム定員 ${MAX_TEAM}）`);
+        await saveDraft(roomId, d);
         io.to(roomId).emit('draft:resolved', { draft: d, logs });
         io.to(roomId).emit('draft:locksUpdated', d.locks);
         io.to(roomId).emit('draft:state', d.state);
-        io.to(roomId).emit('state:updated', getRoom(roomId));
+        io.to(roomId).emit('state:updated', publicRoom(getRoom(roomId)));
         return;
       }else{
         // 未充足チームがある → 次サイクルへ（指名欄クリア・ロックは解除済み）
@@ -343,11 +378,11 @@ io.on('connection', async (socket) => { // ★ async を付ける
     io.to(roomId).emit('draft:picksUpdated', d.picks);
     io.to(roomId).emit('draft:locksUpdated', d.locks);
     io.to(roomId).emit('draft:state', d.state);
-    io.to(roomId).emit('state:updated', getRoom(roomId));
+    io.to(roomId).emit('state:updated', publicRoom(getRoom(roomId)));
   });
 
   // 初期化
-  socket.on('draft:reset', async ()=>{
+  on('draft:reset', async ()=>{
     const room = getRoom(roomId);
     room.draft = emptyDraft();
     room.lastUpdated = Date.now();
@@ -355,25 +390,11 @@ io.on('connection', async (socket) => { // ★ async を付ける
     // ★ DB反映（ここ！）
     try { await resetDraft(roomId); } catch(e){ console.error('[DB resetDraft event]', e); }
 
-    io.to(roomId).emit('state:updated', room);
+    io.to(roomId).emit('state:updated', publicRoom(room));
     io.to(roomId).emit('draft:state', room.draft.state);
   });
 
-  // バックアップ
-  socket.on('backup:export', ({ actionPass })=>{
-    if(!checkActionPass(actionPass)) return socket.emit('action:err', { message: '操作パスワードが違います' });
-    const room = getRoom(roomId);
-    io.to(socket.id).emit('backup:data', { ver:1, players: room.players, draft: room.draft });
-  });
-  socket.on('backup:import', (data)=>{
-    const room = getRoom(roomId);
-    if(!data || !Array.isArray(data.players) || !data.draft) return;
-    room.players = data.players;
-    room.draft = data.draft;
-    room.lastUpdated = Date.now();
-    io.to(roomId).emit('state:updated', room);
-    io.to(roomId).emit('draft:state', room.draft.state);
-  });
+
 });
 
 
