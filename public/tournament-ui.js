@@ -29,14 +29,18 @@ export function mountTournament(socket, showTab) {
   function connectBracket() {
     const root=$('bracket'); root.querySelector('svg')?.remove();
     if (!root.offsetWidth) return;
-    const origin=root.getBoundingClientRect(), rounds=[...root.querySelectorAll('.bracket-round')];
+    const origin=root.getBoundingClientRect(), rounds=[...root.querySelectorAll('.bracket-round')], matches=bracket(tournament), advanced=[];
     const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
     svg.setAttribute('width',root.scrollWidth);svg.setAttribute('height',root.scrollHeight);svg.classList.add('bracket-lines');svg.setAttribute('aria-hidden','true');
     rounds.slice(0,-1).forEach((round,r)=>[...round.querySelectorAll('.match')].forEach((card,i)=>{
       const from=card.getBoundingClientRect(), to=rounds[r+1].querySelectorAll('.match')[Math.floor(i/2)].getBoundingClientRect();
       const x=from.right-origin.left,y=from.top+from.height/2-origin.top,x2=to.left-origin.left,y2=to.top+to.height/2-origin.top,mid=(x+x2)/2;
-      const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',`M ${x} ${y} H ${mid} V ${y2} H ${x2}`);svg.append(path);
-    }));root.prepend(svg);
+      const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d',`M ${x} ${y} H ${mid} V ${y2} H ${x2}`);
+      if (matches[r][i].winner) { path.classList.add('advanced-line'); advanced.push(path); }
+      else svg.append(path);
+    }));
+    // Draw confirmed advances last so shared segments stay gold.
+    svg.append(...advanced);root.prepend(svg);
   }
   new ResizeObserver(()=>requestAnimationFrame(connectBracket)).observe($('bracket'));
   function renderScores(preserveEdits = true) {
