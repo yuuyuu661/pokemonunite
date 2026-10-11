@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/rules.test.js test/pickers.test.js && node test/integration.js"
+    "test": "node --test test/rules.test.js test/pickers.test.js test/draft-retry.test.js && node test/integration.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

@@ -247,7 +247,8 @@ io.on('connection', async socket => {
     const room = getRoom(roomId); const d = room.draft; const role = socket.data.role;
     if(!role || team !== role) return;
     if(!Number.isInteger(round) || round<0 || round>=MAX_ROUNDS) return;
-    if(d.locks[team]) return;
+    if(d.locks[team] || round < d.teams[team].length || d.state.round >= MAX_ROUNDS) return;
+    if(playerId && TEAM_IDS.some(t=>d.teams[t].includes(playerId))) return;
     const exists = room.players.some(p=>p.id===playerId) || playerId==='';
     if(!exists) return;
 
@@ -263,6 +264,7 @@ io.on('connection', async socket => {
     const room = getRoom(roomId); const d = room.draft; const role = socket.data.role;
     if(!role || team !== role) return;
 
+    if(d.state.round >= MAX_ROUNDS || d.teams[team].length > d.state.round) return;
     d.locks[team] = !!locked;
     room.lastUpdated = Date.now();
 
@@ -278,11 +280,12 @@ io.on('connection', async socket => {
   // 開示：ロック済みチームの現在ラウンドを全員に見せる
   on('draft:revealLocked', ()=>{
     const room = getRoom(roomId); const d = room.draft;
+    if(d.state.round >= MAX_ROUNDS) return;
     if(d.state.mode === 'idle'){ d.state = { mode:'sequential', cycle: d.state.cycle || 1, round: d.state.round || 0 }; }
     const r = d.state.round;
     const entries = [];
     for(const t of TEAM_IDS){
-      if(!d.locks[t]) continue;
+      if(!d.locks[t] || d.teams[t].length > r) continue;
       const pid = d.picks[t][r] || '';
       if(!pid) continue;
       const p = room.players.find(x=>x.id===pid);
@@ -291,15 +294,16 @@ io.on('connection', async socket => {
     io.to(roomId).emit('draft:preview', { round: r+1, cycle: d.state.cycle, entries });
   });
 
-  // 進行：ロック済み分のみ一斉解決（※ここではロックを解除しない）
+  // 各枠は全チームの獲得まで継続。未獲得チームだけ再指名する。
   on('draft:progress', async ()=>{
     const room = getRoom(roomId); const d = room.draft;
-    if(d.state.mode !== 'sequential') d.state = { mode:'sequential', cycle: 1, round: 0 };
+    if(d.state.round >= MAX_ROUNDS) return;
+    if(d.state.mode !== 'sequential') d.state = { mode:'sequential', cycle: d.state.cycle || 1, round: d.state.round || 0 };
     const r = d.state.round;
     const logs = [];
 
     if(REQUIRE_LOCKS){
-      const allLocked = TEAM_IDS.every(t => d.locks[t] === true);
+      const allLocked = TEAM_IDS.every(t => d.teams[t].length > r || d.locks[t] === true);
       if(!allLocked){
         return io.to(socket.id).emit('action:err', { message: '全チームのロックが必要です（REQUIRE_LOCKS=true）' });
       }
@@ -307,7 +311,7 @@ io.on('connection', async socket => {
 
     const byPlayer = new Map();
     for(const t of TEAM_IDS){
-      if(!d.locks[t]) continue; // ロック済みのみ対象
+      if(!d.locks[t] || d.teams[t].length > r) continue;
       const pid = d.picks[t][r] || '';
       if(!pid) continue;
       if(!byPlayer.has(pid)) byPlayer.set(pid, []);
@@ -345,30 +349,20 @@ io.on('connection', async socket => {
       }
     }
 
-    // ★ ここではロックを解除しない（維持）
-    // 次ラウンドへ
-    d.state.round += 1;
-
-    // ラウンド完了（= 5番目まで処理）したら、ここで初めてロック解除
-    if(d.state.round >= MAX_ROUNDS){
-      const allFull = TEAM_IDS.every(t => d.teams[t].length >= MAX_TEAM);
-      // 一旦全ロック解除（次サイクルのため）
-      for(const t of TEAM_IDS) d.locks[t] = false;
-
-      if(allFull){
-        d.state = { mode: 'idle', cycle: d.state.cycle, round: MAX_ROUNDS };
+    const pending = TEAM_IDS.filter(t => d.teams[t].length <= r && d.teams[t].length < MAX_TEAM);
+    if(pending.length){
+      for(const t of pending){ d.picks[t][r] = ''; d.locks[t] = false; }
+      d.state.cycle += 1;
+      logs.push(`R${r+1}: ${pending.join(', ')} が同じ枠を再指名`);
+    }else{
+      d.state.round += 1;
+      d.state.cycle = 1;
+      if(d.state.round >= MAX_ROUNDS || TEAM_IDS.every(t=>d.teams[t].length >= MAX_TEAM)){
+        d.state = { mode:'idle', cycle:1, round:MAX_ROUNDS };
+        for(const t of TEAM_IDS) d.locks[t] = false;
         logs.push(`ドラフト完了（全チーム定員 ${MAX_TEAM}）`);
-        await saveDraft(roomId, d);
-        io.to(roomId).emit('draft:resolved', { draft: d, logs });
-        io.to(roomId).emit('draft:locksUpdated', d.locks);
-        io.to(roomId).emit('draft:state', d.state);
-        io.to(roomId).emit('state:updated', publicRoom(getRoom(roomId)));
-        return;
       }else{
-        // 未充足チームがある → 次サイクルへ（指名欄クリア・ロックは解除済み）
-        d.state = { mode: 'sequential', cycle: d.state.cycle + 1, round: 0 };
-        for(const t of TEAM_IDS){ d.picks[t] = Array(MAX_ROUNDS).fill(''); }
-        logs.push(`Cycle ${d.state.cycle} 開始：未充足チームがあるため再指名へ`);
+        logs.push(`全チーム獲得済み：R${d.state.round+1} へ進みます`);
       }
     }
     try { await saveDraft(roomId, d); } catch(e){ console.error('[DB saveDraft progress]', e); }

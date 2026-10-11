@@ -94,7 +94,7 @@
         <button class="btn warn" id="progressAll" disabled>ドラフト進行</button>
         <button class="btn" id="resetDraft">ドラフト初期化</button>
       </div>
-      <div class="note" id="progressNote">※ ロック済みチームの現在ラウンド指名を公開 → 「ドラフト進行」で一斉解決（d100）</div>
+      <div class="note" id="progressNote">※ 各枠で1人ずつ獲得。競合で取れなかったチームだけ同じ枠を再指名し、全チーム獲得後に次の枠へ進みます（d100）</div>
     </div>
 
     <div class="preview hidden" id="previewBox"></div>
@@ -476,11 +476,11 @@ function refreshPickers(){
       }
       const value = draft.picks?.[t]?.[i] || '';
       if(sel.value !== value) sel.value = value;
-      const disabled = !!draft.locks?.[t];
+      const disabled = !!draft.locks?.[t] || i < (draft.teams?.[t]?.length || 0) || draft.state?.round >= MAX_ROUNDS;
       if(sel.disabled !== disabled) sel.disabled = disabled;
     }
     const lockBtn = loginGrid.querySelector(`button[data-lock="${t}"]`);
-    if(lockBtn){ lockBtn.textContent = draft.locks?.[t] ? '解除' : 'ロック';
+    if(lockBtn){ lockBtn.disabled = (draft.teams?.[t]?.length || 0) > (draft.state?.round || 0) || draft.state?.round >= MAX_ROUNDS; lockBtn.textContent = draft.locks?.[t] ? '解除' : 'ロック';
       lockBtn.onclick = ()=> socket.emit('draft:lock', { team:t, locked: !draft.locks?.[t] });
     }
   }
