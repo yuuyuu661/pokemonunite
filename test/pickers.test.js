@@ -1,0 +1,22 @@
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+import test from 'node:test';
+const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const source = html.slice(html.indexOf('function refreshPickers(){'), html.indexOf('function renderTeams(){'));
+test('realtime picks and locks preserve unrelated dropdown nodes and options', () => {
+  const bodies = Object.fromEntries(['A','B'].map(t=>['picks'+t,{children:[],appendChild(row){this.children.push(row);}}]));
+  const sent=[];
+  const context = vm.createContext({TEAM_IDS:['A','B'],MAX_ROUNDS:2,players:[{id:'p1',name:'Player',points:10}],draft:{teams:{},picks:{},locks:{}},escapeHTML:s=>s,socket:{emit:(...args)=>sent.push(args)},loginGrid:{querySelector:()=>null},document:{getElementById:id=>bodies[id],createElement:()=>{const sel={dataset:{},value:'',disabled:false,writes:0,set innerHTML(value){this.writes++;this.options=value;},addEventListener(event,handler){this.handler=handler;}};return {set innerHTML(value){},querySelector:()=>sel};}}});
+  vm.runInContext(source,context);
+  context.refreshPickers();
+  const a=bodies.picksA.children[0].querySelector('select');
+  const b=bodies.picksB.children[0].querySelector('select');
+  context.draft.picks.B=['p1'];context.refreshPickers();
+  assert.equal(b.value,'p1');assert.equal(bodies.picksA.children[0].querySelector('select'),a);assert.equal(a.writes,1);
+  context.draft.locks.B=true;context.refreshPickers();
+  assert.equal(b.disabled,true);assert.equal(a.disabled,false);assert.equal(a.writes,1);
+  a.value='p1';a.handler();assert.deepEqual(JSON.parse(JSON.stringify(sent)),[['draft:pick',{team:'A',round:0,playerId:'p1'}]]);
+  context.players.push({id:'p2',name:'New player',points:20});context.refreshPickers();assert.equal(a.writes,2);assert.match(a.options,/New player/);
+  context.draft.teams.B=['p1'];context.refreshPickers();assert.doesNotMatch(a.options,/value="p1"/);
+});

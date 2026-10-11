@@ -400,6 +400,9 @@ const progressBtn = document.getElementById('progressAll');
 const previewBox = document.getElementById('previewBox');
 
 function buildLoginCards(){
+  const layoutKey = JSON.stringify([TEAM_IDS.map(t=>[t, TEAM_LABELS[t]]), leaderRole]);
+  if(loginGrid.dataset.layoutKey === layoutKey) return;
+  loginGrid.dataset.layoutKey = layoutKey;
   loginGrid.innerHTML = TEAM_IDS.map(t=>`
     <div class="card">
       <h3>リーダー${escapeHTML(TEAM_LABELS[t])} ログイン <span class="pill lock" id="lockBadge${t}">未ロック</span></h3>
@@ -451,21 +454,30 @@ function renderLocksBar(){
 }
 
 function refreshPickers(){
+  const used = new Set(TEAM_IDS.flatMap(x=> draft.teams?.[x] || []));
+  const opts = players.filter(p=>!used.has(p.id));
+  const optionsHTML = '<option value="">（未選択）</option>' +
+    opts.map(p=>`<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}（${p.points}pt）</option>`).join('');
   for(const t of TEAM_IDS){
     const tbody = document.getElementById('picks'+t); if(!tbody) continue;
-    tbody.innerHTML = '';
-    const used = new Set(TEAM_IDS.flatMap(x=> draft.teams?.[x] || []));
+    while(tbody.children.length > MAX_ROUNDS) tbody.lastElementChild.remove();
     for(let i=0;i<MAX_ROUNDS;i++){
-      const tr = document.createElement('tr');
-      const opts = players.filter(p=>!used.has(p.id));
-      tr.innerHTML = `<td class="center">${i+1}</td>
-        <td><select data-t="${t}" data-r="${i}" ${ draft.locks?.[t] ? 'disabled':'' }>
-        <option value="">（未選択）</option>
-        ${opts.map(p=>`<option value="${p.id}">${escapeHTML(p.name)}（${p.points}pt）</option>`).join('')}</select></td>`;
-      const sel = tr.querySelector('select');
-      sel.value = draft.picks?.[t]?.[i] || '';
-      sel.addEventListener('change', ()=> socket.emit('draft:pick', { team:t, round:i, playerId: sel.value }));
-      tbody.appendChild(tr);
+      let sel = tbody.children[i]?.querySelector('select');
+      if(!sel){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td class="center">${i+1}</td><td><select data-t="${t}" data-r="${i}"></select></td>`;
+        sel = tr.querySelector('select');
+        sel.addEventListener('change', ()=> socket.emit('draft:pick', { team:t, round:i, playerId: sel.value }));
+        tbody.appendChild(tr);
+      }
+      if(sel.dataset.optionsHTML !== optionsHTML){
+        sel.innerHTML = optionsHTML;
+        sel.dataset.optionsHTML = optionsHTML;
+      }
+      const value = draft.picks?.[t]?.[i] || '';
+      if(sel.value !== value) sel.value = value;
+      const disabled = !!draft.locks?.[t];
+      if(sel.disabled !== disabled) sel.disabled = disabled;
     }
     const lockBtn = loginGrid.querySelector(`button[data-lock="${t}"]`);
     if(lockBtn){ lockBtn.textContent = draft.locks?.[t] ? '解除' : 'ロック';
